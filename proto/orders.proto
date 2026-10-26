@@ -1,0 +1,43 @@
+edition = "2026";
+
+package maroof_street.orders;
+
+// i really wish i just called this side in the matching engien but i have to stick with "order direction" now
+enum OrderDirection
+{
+
+    SIDE_UNSPECIFIED = 0;
+    SIDE_BUY = 1;
+    SIDE_SELL = 2;
+
+}
+
+enum OrderType
+{
+
+    ORDER_TYPE_UNSPECIFIED = 0;
+    ORDER_TYPE_GTC = 1;
+    ORDER_TYPE_FAK = 2;
+
+}
+
+message SubmitOrder
+{
+
+    string api_key = 1; // identifies the account; gateway uses it for rate limiting and balance checks
+    string symbol = 2; // e.g. AAPL, TSLA
+    int32 price = 3; // limit price in integer ticks; worst price the client is willing to trade at
+    uint32 quantity = 4; // number of units (shares) to buy or sell
+    OrderDirection order_direction = 5; // which side of the book: buy or sell
+    OrderType order_type = 6; // gtc or fak
+    uint64 client_order_id = 7; // caller-assigned ID echoed back in events so the client can match responses to the order it sent
+
+}
+
+message CancelOrder
+{
+    
+    string api_key = 1; // identifies the account making the request
+    uint64 order_id = 2; // the ID the engine assigned to this order, received in the ack after it was submitted
+
+}

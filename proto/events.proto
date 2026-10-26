@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package maroof_street.events;
+
+import "orders.proto";
+
+// top-level wrapper published to Kafka topic exchange.events.<SYMBOL>.
+// every message on that topic is one of these — consumers switch on which oneof field is set.
+message ExchangeEvent
+{
+    
+    uint64 seq = 1; // monotonically increasing per symbol; consumers use this to detect gaps and replay
+    string symbol = 2; // e.g. AAPL, TSLA
+    int64 ts_ns = 3; // engine-local nanosecond timestamp
+
+    oneof payload
+    {
+
+        AckEvent ack = 4;
+        RejectEvent reject = 5;
+        TradeFillEvent trade_fill = 6;
+        BookUpdateEvent book_update = 7;
+        CancelEvent cancel = 8;
+
+    }
+
+}
+
+// a GTC order was accepted and is now resting in the book
+message AckEvent
+{
+
+    uint64 order_id = 1; // engine-assigned ID; client needs this to cancel later
+
+}
+
+// the engine refused the order before it touched the book
+message RejectEvent
+{
+
+    uint64 order_id = 1;
+    RejectedReason reason = 2;
+
+}
+
+// two orders matched; both the aggressor and passive side receive this with the same seq
+message TradeFillEvent
+{
+
+    uint64 aggressor_id = 1; // the incoming order that triggered the match
+    uint64 passive_id = 2; // the resting order it matched against
+    int32 price = 3; // price the trade executed at, in integer ticks
+    uint32 quantity = 4; // number of units that traded
+    bool aggressor_done = 5; // true if the aggressor order is now fully filled
+    bool passive_done = 6; // true if the passive order is now fully filled
+
+}
+
+// the total volume at a price level changed; volume == 0 means the level is now empty
+message BookUpdateEvent
+{
+
+    int32 price = 1;
+    uint32 volume = 2;
+    maroof_street.orders.OrderDirection side = 3;
+
+}
+
+// a resting order was removed by a cancel request
+message CancelEvent
+{
+
+    uint64 order_id = 1;
+
+}
+
+// mirrors OrderRejected from the engine's Protocol.hh, plus gateway-level reasons
+enum RejectedReason
+{
+
+    REJECTED_REASON_UNSPECIFIED = 0;
+    REJECTED_REASON_INVALID_PRICE = 1;
+    REJECTED_REASON_INVALID_QUANTITY = 2;
+    REJECTED_REASON_DUPLICATE_ID = 3;
+    REJECTED_REASON_POOL_FULL = 4;
+    REJECTED_REASON_NOT_FOUND = 5;
+    REJECTED_REASON_INSUFFICIENT_FUNDS = 6; // rejected by the gateway risk check, never reached the engine
+    REJECTED_REASON_RATE_LIMITED = 7; // rejected by the gateway rate limiter, never reached the engine
+
+}

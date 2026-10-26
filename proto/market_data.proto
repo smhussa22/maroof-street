@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package maroof_street.marketdata;
+
+import "orders.proto";
+
+service MarketData
+{
+
+    // streams best bid and best ask whenever the top of the book changes
+    rpc stream_top_of_book(SymbolRequest) returns (stream TopOfBook);
+
+    // streams price levels and their volumes; first message is always a full snapshot
+    // subsequent messages are deltas (only levels that changed)
+    rpc stream_depth(DepthRequest) returns (stream DepthUpdate);
+
+    // streams every trade as it happens, for the trade tape
+    rpc stream_trades(SymbolRequest) returns (stream Trade);
+
+}
+
+message SymbolRequest
+{
+
+    string symbol = 1; // e.g. AAPL, TSLA
+
+}
+
+message DepthRequest
+{
+
+    string symbol = 1;
+    uint32 levels = 2; // how many price levels per side to include (default 10)
+
+}
+
+message TopOfBook
+{
+
+    string symbol = 1;
+    int64 ts_ns = 2;
+    int32 best_bid = 3; // highest price a buyer is willing to pay
+    uint32 bid_qty = 4; // total volume sitting at best bid
+    int32 best_ask = 5; // lowest price a seller is willing to accept
+    uint32 ask_qty = 6; // total volume sitting at best ask
+
+}
+
+message DepthUpdate
+{
+
+    string symbol = 1;
+    int64 ts_ns = 2;
+    bool is_snapshot = 3; // true on the first message; false means only changed levels are included
+    repeated PriceLevel bids = 4; // changed bid levels; volume == 0 means the level was cleared
+    repeated PriceLevel asks = 5; // changed ask levels; volume == 0 means the level was cleared
+
+}
+
+message PriceLevel
+{
+
+    int32 price = 1;
+    uint32 volume = 2;
+
+}
+
+message Trade
+{
+
+    string symbol = 1;
+    int64 ts_ns = 2;
+    int32 price = 3;
+    uint32 quantity = 4;
+    maroof_street.orders.OrderDirection aggressor_side = 5; // which side was the incoming order that triggered the match
+    
+}
