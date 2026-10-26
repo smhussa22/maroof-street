@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ---- Matching engine ----
 include(FetchContent)
 FetchContent_Declare(
     matching_engine
@@ -16,12 +17,42 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(matching_engine)
 
-
 # ---- External libraries (installed via apt) ----
-find_package(gRPC CONFIG REQUIRED) # target: gRPC::grpc++
-find_package(protobuf CONFIG REQUIRED) # target: protobuf::libprotobuf
-find_package(RdKafka CONFIG REQUIRED) # target: RdKafka::rdkafka++
-find_package(hiredis CONFIG REQUIRED) # target: hiredis::hiredis
+# sudo apt install libgrpc++-dev libprotobuf-dev protobuf-compiler-grpc
+#                  librdkafka-dev libhiredis-dev libpqxx-dev
+find_package(Protobuf REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+find_package(RdKafka CONFIG REQUIRED)
+find_package(hiredis CONFIG REQUIRED)
+
+# ---- Proto codegen ----
+# compiles all .proto files into C++ and gRPC stubs, collected into one library
+# every service that needs generated types links exchange_proto
+file(GLOB PROTO_FILES "${CMAKE_SOURCE_DIR}/proto/*.proto")
+
+add_library(exchange_proto STATIC)
+target_include_directories(exchange_proto PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(exchange_proto PUBLIC protobuf::libprotobuf gRPC::grpc++)
+
+get_target_property(grpc_cpp_plugin gRPC::grpc_cpp_plugin LOCATION)
+
+protobuf_generate(
+    TARGET exchange_proto
+    PROTOS ${PROTO_FILES}
+    LANGUAGE cpp
+    IMPORT_DIRS ${CMAKE_SOURCE_DIR}/proto
+    PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+protobuf_generate(
+    TARGET exchange_proto
+    PROTOS ${PROTO_FILES}
+    LANGUAGE grpc
+    GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
+    PLUGIN "protoc-gen-grpc=${grpc_cpp_plugin}"
+    IMPORT_DIRS ${CMAKE_SOURCE_DIR}/proto
+    PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}
+)
 
 # ---- Services ----
 add_subdirectory(services/gateway)
