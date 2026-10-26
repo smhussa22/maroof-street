@@ -1,0 +1,74 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Compiled output
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# IDE - VS Code
+.vscode/
+
+# IDE - CLion / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+cmake-build-debug/
+cmake-build-release/
+
+# IDE - Visual Studio
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Dependency managers
+vcpkg_installed/
+conan_*
+
+# Test output
+Testing/
+CTestCostData.txt
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ASan build + benchmark artifacts + throwaway debug scripts
+build-asan/
+*.hgrm
+run_asan.sh
+run_gdb.sh
+run_small.sh
+run_test.sh
+run_test2.sh
+run_test3.sh
+
+goals.md
