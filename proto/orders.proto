@@ -1,4 +1,4 @@
-edition = "2026";
+syntax = "proto3";
 
 package maroof_street.orders;
 
@@ -36,8 +36,20 @@ message SubmitOrder
 
 message CancelOrder
 {
-    
+
     string api_key = 1; // identifies the account making the request
     uint64 order_id = 2; // the ID the engine assigned to this order, received in the ack after it was submitted
+
+}
+
+// wrapper published to commands.<SYMBOL>; consumer switches on which oneof field is set
+message Command
+{
+
+    oneof payload
+    {
+        SubmitOrder submit = 1;
+        CancelOrder cancel = 2;
+    }
 
 }
