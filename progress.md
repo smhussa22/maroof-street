@@ -18,9 +18,10 @@
 - [ ] verify: `docker-compose up` starts infra and gateway answers a health check
 
 ## Stage 2: Event pipeline (engine-host + Kafka)
-- [ ] `engine-host` reads commands from Kafka topic `commands.<SYMBOL>`
+- [x] `engine-host` reads commands from Kafka topic `commands.<SYMBOL>`
 - [x] `KafkaListener` — maps all 5 engine callbacks to `ExchangeEvent` protos, serializes, hands to publisher
 - [x] `KafkaPublisher` — owns rdkafka producer, writes serialized bytes to `events.<SYMBOL>` topic
+- [x] verified end-to-end: test command in → engine processes → ExchangeEvents out on `events.AAPL`
 - [ ] publisher thread drains outbound queue into Kafka without touching the matching thread
 - [ ] re-run engine benchmark with publisher attached — confirm hot path latency unchanged
 
