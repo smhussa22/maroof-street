@@ -24,7 +24,7 @@ public:
     void publish(std::string_view bytes);
 
 private:
-    
+
     std::unique_ptr<RdKafka::Producer> m_producer;
     std::string m_topic;
 
@@ -38,7 +38,7 @@ inline KafkaPublisher::KafkaPublisher(std::string_view topic, std::string_view b
     conf->set("bootstrap.servers", std::string(brokers), errstr);
     m_producer.reset(RdKafka::Producer::create(conf, errstr));
     delete conf;
-    
+
 }
 
 inline KafkaPublisher::~KafkaPublisher()

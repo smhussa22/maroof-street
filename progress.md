@@ -38,12 +38,13 @@
 - [ ] first message on each stream is a full snapshot, subsequent are deltas
 
 ## Stage 5: Gateway and risk
-- [ ] gateway implements `SubmitOrder` and `CancelOrder` gRPC endpoints
+- [x] gateway implements `SubmitOrder` and `CancelOrder` gRPC endpoints
+- [x] gateway routes by symbol to the correct `commands.<SYMBOL>` Kafka topic
+- [x] verified end-to-end: grpcurl → gateway → commands.AAPL topic confirmed
 - [ ] API key maps to an account
 - [ ] per-account rate limiting in Redis (token bucket)
 - [ ] balance check in Redis before forwarding to Kafka
 - [ ] Redis balances kept in sync by ledger (reserve on submit, release on fill or cancel)
-- [ ] gateway routes by symbol to the correct `commands.<SYMBOL>` Kafka topic
 
 ## Stage 6: Kubernetes
 - [ ] Deployments and Services for every component

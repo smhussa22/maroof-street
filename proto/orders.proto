@@ -38,7 +38,8 @@ message CancelOrder
 {
 
     string api_key = 1; // identifies the account making the request
-    uint64 order_id = 2; // the ID the engine assigned to this order, received in the ack after it was submitted
+    string symbol = 2; // e.g. AAPL, TSLA; needed by the gateway to route to the correct engine
+    uint64 order_id = 3; // the ID the engine assigned to this order, received in the ack after it was submitted
 
 }
 
@@ -51,5 +52,21 @@ message Command
         SubmitOrder submit = 1;
         CancelOrder cancel = 2;
     }
+
+}
+
+message OrderAck
+{
+
+    bool accepted = 1; // true = forwarded to kafka, false = rejected by gateway
+    string rejected_reason = 2; // only populated if accepted == false
+
+}
+
+service OrderService
+{
+
+    rpc submit_order(SubmitOrder) returns (OrderAck);
+    rpc cancel_order(CancelOrder) returns (OrderAck);
 
 }

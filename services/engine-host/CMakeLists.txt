@@ -2,7 +2,10 @@ add_executable(engine-host
     src/main.cc
 )
 
-target_include_directories(engine-host PRIVATE include)
+target_include_directories(engine-host PRIVATE
+    include
+    ../shared/include
+)
 
 target_link_libraries(engine-host PRIVATE
     lob_engine              # matching engine + maroof_net (transitive)

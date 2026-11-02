@@ -1,5 +1,10 @@
 add_executable(gateway src/main.cc)
 
+target_include_directories(gateway PRIVATE
+    include
+    ../shared/include
+)
+
 target_link_libraries(gateway PRIVATE
     exchange_proto          # generated protobuf + gRPC stubs
     gRPC::grpc++            # gRPC server runtime
