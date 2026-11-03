@@ -51,9 +51,13 @@ inline KafkaPublisher::~KafkaPublisher()
 inline void KafkaPublisher::publish(std::string_view bytes)
 {
 
-    RdKafka::ErrorCode err = m_producer->produce(m_topic, RdKafka::Topic::PARTITION_UA, RdKafka::Producer::RK_MSG_COPY, const_cast<char*>(bytes.data()), bytes.size(), nullptr, 0, 0, nullptr);
+    RdKafka::ErrorCode err { m_producer->produce(m_topic, RdKafka::Topic::PARTITION_UA, RdKafka::Producer::RK_MSG_COPY, const_cast<char*>(bytes.data()), bytes.size(), nullptr, 0, 0, nullptr) };
+    
     if (err != RdKafka::ERR_NO_ERROR)
+    {
         std::cerr << "produce failed: " << RdKafka::err2str(err) << "\n";
+    }
+    
     m_producer->poll(0);
 
 }
