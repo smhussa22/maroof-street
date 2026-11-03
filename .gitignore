@@ -64,6 +64,7 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.venv-win/
 venv/
 
 # OS junk

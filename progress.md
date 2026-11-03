@@ -22,7 +22,8 @@
 - [x] `KafkaListener` — maps all 5 engine callbacks to `ExchangeEvent` protos, serializes, hands to publisher
 - [x] `KafkaPublisher` — owns rdkafka producer, writes serialized bytes to `events.<SYMBOL>` topic
 - [x] verified end-to-end: test command in → engine processes → ExchangeEvents out on `events.AAPL`
-- [ ] publisher thread drains outbound queue into Kafka without touching the matching thread
+- [x] SpscQueue — lock-free SPSC ring buffer, power-of-two capacity, cache-line aligned head/tail
+- [x] KafkaPublisher — publish() enqueues bytes onto SpscQueue; background drain thread calls rdkafka produce
 - [ ] re-run engine benchmark with publisher attached — confirm hot path latency unchanged
 
 ## Stage 3: Settlement (ledger)
