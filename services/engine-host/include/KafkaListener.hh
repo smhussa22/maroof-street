@@ -14,7 +14,7 @@ class KafkaListener
 {
 public:
 
-    explicit KafkaListener(KafkaPublisher& publisher, std::string_view symbol);
+    explicit KafkaListener(KafkaPublisher<4096>& publisher, std::string_view symbol);
     ~KafkaListener() = default;
 
     KafkaListener(const KafkaListener&) = delete;
@@ -31,7 +31,7 @@ public:
 
 private:
 
-    KafkaPublisher& m_publisher;
+    KafkaPublisher<4096>& m_publisher;
     std::string m_symbol;
     uint64_t m_seq { 0 };
 
@@ -78,7 +78,7 @@ namespace
 
 } // namespace
 
-inline KafkaListener::KafkaListener(KafkaPublisher& publisher, std::string_view symbol) : m_publisher { publisher } , m_symbol { symbol } {}
+inline KafkaListener::KafkaListener(KafkaPublisher<4096>& publisher, std::string_view symbol) : m_publisher { publisher } , m_symbol { symbol } {}
 
 inline maroof_street::events::ExchangeEvent KafkaListener::make_event()
 {

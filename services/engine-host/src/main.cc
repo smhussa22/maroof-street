@@ -14,7 +14,7 @@ int main()
     // @todo add an environment block in docker-compose and k8s
     const char* symbol = std::getenv("SYMBOL");
 
-    KafkaPublisher publisher { std::string("events.") + symbol, "localhost:9092" };
+    KafkaPublisher<4096> publisher { std::string("events.") + symbol, "localhost:9092" };
     KafkaListener listener { publisher, symbol };
     OrderBook<KafkaListener> order_book { listener };
 

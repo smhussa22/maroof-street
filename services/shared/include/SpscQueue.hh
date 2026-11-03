@@ -34,7 +34,9 @@ public:
     [[nodiscard]] bool try_push(Val_T&& element) noexcept (std::is_nothrow_assignable_v<T&, Val_T&&>);
 
     // consumer only; returns nullopt if the queue is emptry
-    std::optional<T> try_pop();
+    [[nodiscard]] std::optional<T> try_pop();
+
+    [[nodiscard]] bool is_empty() const noexcept { return m_head.load(std::memory_order_relaxed) == m_tail.load(std::memory_order_relaxed); }
 
 private:
 
