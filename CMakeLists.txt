@@ -46,12 +46,15 @@ foreach(proto_file ${PROTO_FILES})
     set(grpc_cc "${CMAKE_CURRENT_BINARY_DIR}/${proto_name}.grpc.pb.cc")
     set(grpc_h  "${CMAKE_CURRENT_BINARY_DIR}/${proto_name}.grpc.pb.h")
 
+    set(py_pb "${CMAKE_SOURCE_DIR}/services/ledger/${proto_name}_pb2.py")
+
     add_custom_command(
-        OUTPUT ${pb_cc} ${pb_h} ${grpc_cc} ${grpc_h}
+        OUTPUT ${pb_cc} ${pb_h} ${grpc_cc} ${grpc_h} ${py_pb}
         COMMAND ${Protobuf_PROTOC_EXECUTABLE}
             --cpp_out=${CMAKE_CURRENT_BINARY_DIR}
             --grpc_out=${CMAKE_CURRENT_BINARY_DIR}
             --plugin=protoc-gen-grpc=${grpc_cpp_plugin}
+            --python_out=${CMAKE_SOURCE_DIR}/services/ledger
             -I${CMAKE_SOURCE_DIR}/proto
             ${proto_file}
         DEPENDS ${proto_file}
@@ -65,6 +68,9 @@ endforeach()
 add_library(exchange_proto STATIC ${PROTO_SRCS})
 target_include_directories(exchange_proto PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(exchange_proto PUBLIC protobuf::libprotobuf gRPC::grpc++)
+
+# SpscQueue uses hardware_destructive_interference_size; the value is stable at 64 bytes on x86-64
+add_compile_options(-Wno-interference-size)
 
 # ---- Services ----
 add_subdirectory(services/gateway)

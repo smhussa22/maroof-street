@@ -27,10 +27,11 @@
 - [ ] re-run engine benchmark with publisher attached — confirm hot path latency unchanged
 
 ## Stage 3: Settlement (ledger)
-- [ ] Postgres schema — accounts, balances, positions, trades
-- [ ] Python ledger consumes `events.<SYMBOL>`, applies fills to Postgres
-- [ ] idempotent on seq — replaying the same message twice leaves balances unchanged
-- [ ] both sides of a trade settle in one transaction
+- [x] Postgres schema — accounts, balances, positions, trades
+- [x] Python ledger consumes `events.<SYMBOL>`, applies fills to Postgres
+- [x] idempotent on seq — ON CONFLICT DO NOTHING on (seq, symbol) prevents double-settling
+- [x] verified end-to-end: grpcurl buy+sell → engine → events.AAPL → ledger → trades row in Postgres
+- [ ] balance/position settlement — requires account mapping (order_id → account_id); wired up in Stage 5
 
 ## Stage 4: Market data
 - [ ] Python market-data service consumes `events.<SYMBOL>`

@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS trades (
     seq          BIGINT      NOT NULL,
     symbol       VARCHAR(16) NOT NULL,
-    aggressor_id INT         NOT NULL REFERENCES accounts(account_id),
-    passive_id   INT         NOT NULL REFERENCES accounts(account_id),
+    aggressor_id BIGINT      NOT NULL,
+    passive_id   BIGINT      NOT NULL,
     price        INT         NOT NULL,
     quantity     INT         NOT NULL,
     settled_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),

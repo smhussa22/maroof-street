@@ -85,7 +85,12 @@ template <size_t N>
 inline void KafkaPublisher<N>::publish(std::string_view bytes)
 {
 
-    m_queue.try_push(std::string { bytes });
+    if (!m_queue.try_push(std::string { bytes }))
+    {
+
+        return;
+
+    }
 
 }
 
