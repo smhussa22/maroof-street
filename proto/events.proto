@@ -53,6 +53,7 @@ message TradeFillEvent
     uint32 quantity = 4; // number of units that traded
     bool aggressor_done = 5; // true if the aggressor order is now fully filled
     bool passive_done = 6; // true if the passive order is now fully filled
+    maroof_street.orders.OrderDirection aggressor_side = 7; // which side initiated the trade
 
 }
 

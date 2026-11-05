@@ -25,3 +25,24 @@ CREATE TABLE IF NOT EXISTS trades (
     settled_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (seq, symbol)
 );
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    key_hash   CHAR(64)    PRIMARY KEY,  -- SHA-256 hex digest of the raw API key
+    account_id INT         NOT NULL REFERENCES accounts(account_id)
+);
+
+-- TODO: remove before production; test accounts and keys only
+INSERT INTO accounts (account_id, name) VALUES
+    (1, 'alice'),
+    (2, 'bob')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO balances (account_id, cash) VALUES
+    (1, 100000),
+    (2, 100000)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO api_keys (key_hash, account_id) VALUES
+    (encode(sha256('alice-key-123'), 'hex'), 1),
+    (encode(sha256('bob-key-456'),   'hex'), 2)
+ON CONFLICT DO NOTHING;

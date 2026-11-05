@@ -22,10 +22,12 @@ FetchContent_MakeAvailable(matching_engine)
 #                  librdkafka-dev libhiredis-dev libpqxx-dev
 find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RdKafkaCpp REQUIRED IMPORTED_TARGET rdkafka++)
 pkg_check_modules(Hiredis REQUIRED IMPORTED_TARGET hiredis)
+pkg_check_modules(LibPQ REQUIRED IMPORTED_TARGET libpq)
 
 # ---- Proto codegen ----
 # calls protoc directly so import path resolution is consistent across all files.

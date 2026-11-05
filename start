@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RESET="\033[0m"
+declare -A COLOR=(
+    [infra]="\033[0;36m"
+    [engine-host]="\033[0;33m"
+    [gateway]="\033[0;32m"
+    [ledger]="\033[0;35m"
+    [market-data]="\033[0;34m"
+)
+
+PIDS=()
+
+cleanup() {
+    echo -e "\nshutting down..."
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    wait 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+run() {
+    local name="$1"; shift
+    local color="${COLOR[$name]:-$RESET}"
+    ("$@" 2>&1) | while IFS= read -r line; do
+        printf "${color}[%-12s]${RESET} %s\n" "$name" "$line"
+    done &
+    PIDS+=($!)
+}
+
+start() {
+    case "$1" in
+        infra)
+            run infra docker-compose -f deploy/docker-compose.yml up
+            ;;
+        engine-host)
+            SYMBOL="${SYMBOL:-AAPL}" run engine-host ./build/services/engine-host/engine-host
+            ;;
+        gateway)
+            run gateway ./build/services/gateway/gateway
+            ;;
+        ledger)
+            run ledger env \
+                DATABASE_URL="host=localhost dbname=exchange user=exchange password=exchange" \
+                KAFKA_BROKERS="localhost:9092" \
+                /mnt/c/Users/faraz/maroof-street/services/ledger/.venv/bin/python3 services/ledger/main.py
+            ;;
+        market-data)
+            run market-data env \
+                KAFKA_BROKERS="localhost:9092" \
+                REDIS_URL="redis://localhost:6379" \
+                /mnt/c/Users/faraz/maroof-street/services/ledger/.venv/bin/python3 services/market-data/main.py
+            ;;
+        *)
+            echo "unknown service: $1"
+            echo "usage: ./start <service> [service ...]"
+            echo "services: infra engine-host gateway ledger market-data"
+            exit 1
+            ;;
+    esac
+}
+
+if [ $# -eq 0 ]; then
+    echo "usage: ./start <service> [service ...]"
+    echo "services: infra engine-host gateway ledger market-data"
+    exit 1
+fi
+
+for svc in "$@"; do
+    start "$svc"
+done
+
+wait

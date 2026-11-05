@@ -10,4 +10,6 @@ target_link_libraries(gateway PRIVATE
     gRPC::grpc++            # gRPC server runtime
     PkgConfig::RdKafkaCpp   # forward accepted orders to Kafka
     PkgConfig::Hiredis      # rate limiting + risk check (Redis)
+    PkgConfig::LibPQ        # Postgres: seed api key -> account_id into Redis at startup
+    OpenSSL::Crypto         # SHA-256 for API key hashing
 )

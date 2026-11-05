@@ -43,7 +43,8 @@
 - [x] gateway implements `SubmitOrder` and `CancelOrder` gRPC endpoints
 - [x] gateway routes by symbol to the correct `commands.<SYMBOL>` Kafka topic
 - [x] verified end-to-end: grpcurl → gateway → commands.AAPL topic confirmed
-- [ ] API key maps to an account
+- [x] API key → account mapping: SHA-256 hashed keys stored in Postgres, seeded into Redis at startup, looked up per request
+- [x] verified: valid key accepted, missing key returns UNAUTHENTICATED
 - [ ] per-account rate limiting in Redis (token bucket)
 - [ ] balance check in Redis before forwarding to Kafka
 - [ ] Redis balances kept in sync by ledger (reserve on submit, release on fill or cancel)

@@ -1,0 +1,5 @@
+confluent-kafka
+redis
+protobuf
+grpcio
+grpcio-tools
