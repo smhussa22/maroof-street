@@ -1,27 +1,17 @@
 import os
 import psycopg2
+import redis as redis_lib
 from confluent_kafka import Consumer, KafkaError
 
 from events_pb2 import ExchangeEvent
+from orders_pb2 import SIDE_BUY
 
 SYMBOLS = ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"]
 
-DB_DSN = os.getenv("DATABASE_URL", "host=localhost dbname=maroof user=postgres password=postgres")
+DB_DSN        = os.getenv("DATABASE_URL", "host=localhost dbname=exchange user=exchange password=exchange")
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
+REDIS_URL     = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-# 1. connects to postgres, runs schema.sql to make tabels
-# 2. create a kafka consumer subscribed to events.<SYMBOL>
-# 3. deserialize the raw bytes back into an ExchangeEvent proto object
-# 4. if the event is a trade_fill, settle it in Postgres; debit buyer cash/credit position, credit seller cash/debit position, all in one transaction
-
-    # debit -> subtract from an account (cash goes down, or shares go down)
-    # credit -> add to an account (cash goes up, or shares go up)
-    # position -> how many shares of a symbol an account holds
-
-    # buyer paid cash to get shares -> cash goes down (debit), position goes up (credit)
-    # seller gave up shares to get cash -> cash goes up (credit), position goes down (debit)
-
-# 5. if the event is anything else (ack, cancel, book update), ignore it and poll again; those dont need to persist
 
 def apply_schema(conn):
     schema = open(os.path.join(os.path.dirname(__file__), "schema.sql")).read()
@@ -30,26 +20,79 @@ def apply_schema(conn):
     conn.commit()
 
 
-def settle(conn, event, fill):
+def settle(conn, r, event, fill):
+    symbol = event.symbol
+
     with conn.cursor() as cur:
         # idempotency: skip if already settled
         cur.execute(
             "INSERT INTO trades (seq, symbol, aggressor_id, passive_id, price, quantity) "
             "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING seq",
-            (event.seq, event.symbol, fill.aggressor_id, fill.passive_id, fill.price, fill.quantity),
+            (event.seq, symbol, fill.aggressor_id, fill.passive_id, fill.price, fill.quantity),
         )
         if cur.rowcount == 0:
-            return  # already settled
-
-        # TODO: balance/position settlement requires account mapping (order_id -> account_id)
-        # will be wired up in Stage 5 when API key -> account is in place
-
+            return
     conn.commit()
+
+    qty   = fill.quantity
+    price = fill.price
+
+    # look up account metadata for both sides
+    aggressor_meta = r.hgetall(f"order_meta:{symbol}:{fill.aggressor_id}")
+    passive_meta   = r.hgetall(f"order_meta:{symbol}:{fill.passive_id}")
+
+    # settle aggressor side
+    if aggressor_meta:
+        acc = aggressor_meta[b"account_id"].decode()
+        if fill.aggressor_side == SIDE_BUY:
+            # buyer: reserved cash consumed, gains shares
+            r.incrbyfloat(f"reserved:{acc}:cash",              -(price * qty))
+            r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
+        else:
+            # seller: reserved shares consumed, gains cash
+            r.incrbyfloat(f"reserved:{acc}:position:{symbol}",  -qty)
+            r.incrbyfloat(f"balance:{acc}:cash",                 price * qty)
+
+    # settle passive side (opposite direction)
+    if passive_meta:
+        acc = passive_meta[b"account_id"].decode()
+        if fill.aggressor_side == SIDE_BUY:
+            # passive is seller: reserved shares consumed, gains cash
+            r.incrbyfloat(f"reserved:{acc}:position:{symbol}",  -qty)
+            r.incrbyfloat(f"balance:{acc}:cash",                 price * qty)
+        else:
+            # passive is buyer: reserved cash consumed, gains shares
+            r.incrbyfloat(f"reserved:{acc}:cash",              -(price * qty))
+            r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
+
+
+def release_cancel(r, symbol, order_id):
+    meta = r.hgetall(f"order_meta:{symbol}:{order_id}")
+    if not meta:
+        return
+
+    acc   = meta[b"account_id"].decode()
+    price = int(meta[b"price"].decode())
+    qty   = int(meta[b"qty"].decode())
+    side  = meta[b"side"].decode()
+
+    if side == "buy":
+        # release remaining reserved cash back to available
+        r.incrbyfloat(f"reserved:{acc}:cash", -(price * qty))
+        r.incrbyfloat(f"balance:{acc}:cash",    price * qty)
+    else:
+        # release remaining reserved shares back to available
+        r.incrbyfloat(f"reserved:{acc}:position:{symbol}", -qty)
+        r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
+
+    r.delete(f"order_meta:{symbol}:{order_id}")
 
 
 def main():
     conn = psycopg2.connect(DB_DSN)
     apply_schema(conn)
+
+    r = redis_lib.from_url(REDIS_URL)
 
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKERS,
@@ -74,7 +117,9 @@ def main():
             event.ParseFromString(msg.value())
 
             if event.HasField("trade_fill"):
-                settle(conn, event, event.trade_fill)
+                settle(conn, r, event, event.trade_fill)
+            elif event.HasField("cancel"):
+                release_cancel(r, event.symbol, event.cancel.order_id)
 
     finally:
         consumer.close()

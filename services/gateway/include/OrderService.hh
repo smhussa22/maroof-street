@@ -23,7 +23,8 @@ class GatewayOrderService : public maroof_street::orders::OrderService::Service
 {
 public:
 
-    explicit GatewayOrderService(const std::vector<std::string>& symbols, std::string_view brokers, redisContext* redis, std::string_view rate_limit_script);
+    explicit GatewayOrderService(const std::vector<std::string>& symbols, std::string_view brokers, redisContext* redis,
+                                 std::string_view rate_limit_script, std::string_view reserve_cash_script, std::string_view reserve_shares_script);
     ~GatewayOrderService() = default;
 
     GatewayOrderService(const GatewayOrderService&) = delete;
@@ -44,6 +45,8 @@ private:
     std::unordered_map<std::string, std::unique_ptr<KafkaPublisher<4096>>> m_publishers {};
     redisContext* m_redis { nullptr };
     std::string m_rate_limit_script {};
+    std::string m_reserve_cash_script {};
+    std::string m_reserve_shares_script {};
     
 };
 
@@ -85,6 +88,30 @@ inline bool check_rate_limit(redisContext* redis_ctx, const std::string& script,
     return reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
 }
 
+// runs a reserve Lua script; returns true if the reservation succeeded
+inline bool reserve(redisContext* redis_ctx, const std::string& script,
+                    const std::string& balance_key, const std::string& reserved_key, long long amount)
+{
+    RedisReply reply {
+        static_cast<redisReply*>(redisCommand(redis_ctx,
+            "EVAL %s 2 %s %s %lld", script.c_str(), balance_key.c_str(), reserved_key.c_str(), amount)),
+        freeReplyObject
+    };
+    return reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
+}
+
+// releases a reservation by moving amount back from reserved to available
+inline void release(redisContext* redis_ctx, const std::string& balance_key,
+                    const std::string& reserved_key, long long amount)
+{
+    RedisReply r1 {
+        static_cast<redisReply*>(redisCommand(redis_ctx, "INCRBYFLOAT %s %lld",  balance_key.c_str(),  amount)), freeReplyObject
+    };
+    RedisReply r2 {
+        static_cast<redisReply*>(redisCommand(redis_ctx, "INCRBYFLOAT %s -%lld", reserved_key.c_str(), amount)), freeReplyObject
+    };
+}
+
 // hashes the x-api-key header with SHA-256, looks it up in Redis, returns the account_id or nullopt
 inline std::optional<int> lookup_account(redisContext* redis_ctx, grpc::ServerContext* grpc_ctx)
 {
@@ -109,8 +136,12 @@ inline std::optional<int> lookup_account(redisContext* redis_ctx, grpc::ServerCo
 } // namespace
 
 
-inline GatewayOrderService::GatewayOrderService(const std::vector<std::string>& symbols, std::string_view brokers, redisContext* redis, std::string_view rate_limit_script)
-    : m_redis { redis }, m_rate_limit_script { rate_limit_script }
+inline GatewayOrderService::GatewayOrderService(const std::vector<std::string>& symbols, std::string_view brokers, redisContext* redis,
+    std::string_view rate_limit_script, std::string_view reserve_cash_script, std::string_view reserve_shares_script)
+    : m_redis { redis }
+    , m_rate_limit_script { rate_limit_script }
+    , m_reserve_cash_script { reserve_cash_script }
+    , m_reserve_shares_script { reserve_shares_script }
 {
     for (const auto& symbol : symbols)
         m_publishers[symbol] = std::make_unique<KafkaPublisher<4096>>("commands." + symbol, brokers);
@@ -125,9 +156,36 @@ inline grpc::Status GatewayOrderService::submit_order(grpc::ServerContext* grpc_
     if (!check_rate_limit(m_redis, m_rate_limit_script, *account_id))
         return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "rate limit exceeded");
 
+    const std::string id = std::to_string(*account_id);
+    const std::string& sym = request->symbol();
+
+    if (request->order_direction() == maroof_street::orders::SIDE_BUY)
+    {
+        const long long cost = static_cast<long long>(request->price()) * request->quantity();
+        if (!reserve(m_redis, m_reserve_cash_script,
+                     "balance:" + id + ":cash",
+                     "reserved:" + id + ":cash", cost))
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "insufficient cash");
+    }
+    else if (request->order_direction() == maroof_street::orders::SIDE_SELL)
+    {
+        if (!reserve(m_redis, m_reserve_shares_script,
+                     "balance:" + id + ":position:" + sym,
+                     "reserved:" + id + ":position:" + sym,
+                     static_cast<long long>(request->quantity())))
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "insufficient shares");
+    }
+
+    // store order metadata so the ledger can map order_id -> account for balance settlement
+    const std::string meta_key = "order_meta:" + sym + ":" + std::to_string(request->client_order_id());
+    const std::string side_str = (request->order_direction() == maroof_street::orders::SIDE_BUY) ? "buy" : "sell";
+    redisCommand(m_redis, "HSET %s account_id %d price %d qty %u side %s",
+        meta_key.c_str(), *account_id, request->price(), request->quantity(), side_str.c_str());
+    redisCommand(m_redis, "EXPIRE %s 86400", meta_key.c_str());
+
     maroof_street::orders::Command command;
     command.mutable_submit()->CopyFrom(*request);
-    return forward_command(request->symbol(), command, response, m_publishers);
+    return forward_command(sym, command, response, m_publishers);
 }
 
 inline grpc::Status GatewayOrderService::cancel_order(grpc::ServerContext* grpc_ctx, const maroof_street::orders::CancelOrder* request, maroof_street::orders::OrderAck* response)
@@ -138,6 +196,9 @@ inline grpc::Status GatewayOrderService::cancel_order(grpc::ServerContext* grpc_
 
     if (!check_rate_limit(m_redis, m_rate_limit_script, *account_id))
         return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "rate limit exceeded");
+
+    // NOTE: cancel releases reservations in the ledger once the CancelledEvent is consumed;
+    // we cannot release here because we don't know price/qty/side from a cancel request alone.
 
     maroof_street::orders::Command command;
     command.mutable_cancel()->CopyFrom(*request);

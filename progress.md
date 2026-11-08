@@ -45,9 +45,10 @@
 - [x] verified end-to-end: grpcurl → gateway → commands.AAPL topic confirmed
 - [x] API key → account mapping: SHA-256 hashed keys stored in Postgres, seeded into Redis at startup, looked up per request
 - [x] verified: valid key accepted, missing key returns UNAUTHENTICATED
-- [ ] per-account rate limiting in Redis (token bucket)
-- [ ] balance check in Redis before forwarding to Kafka
-- [ ] Redis balances kept in sync by ledger (reserve on submit, release on fill or cancel)
+- [x] per-account rate limiting in Redis (token bucket Lua script, 100 token max, 10/sec refill)
+- [x] balance check in Redis before forwarding to Kafka — BUY reserves cash, SELL reserves shares via atomic Lua scripts
+- [x] balances and positions seeded from Postgres into Redis at gateway startup
+- [x] Redis balances kept in sync by ledger — fills consume reservations and credit the other side, cancels release remaining reservation
 
 ## Stage 6: Kubernetes
 - [ ] Deployments and Services for every component

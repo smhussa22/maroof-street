@@ -45,13 +45,14 @@ start() {
             run ledger env \
                 DATABASE_URL="host=localhost dbname=exchange user=exchange password=exchange" \
                 KAFKA_BROKERS="localhost:9092" \
-                /mnt/c/Users/faraz/maroof-street/services/ledger/.venv/bin/python3 services/ledger/main.py
+                REDIS_URL="redis://localhost:6379" \
+                /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/ledger/main.py
             ;;
         market-data)
             run market-data env \
                 KAFKA_BROKERS="localhost:9092" \
                 REDIS_URL="redis://localhost:6379" \
-                /mnt/c/Users/faraz/maroof-street/services/ledger/.venv/bin/python3 services/market-data/main.py
+                /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/market-data/main.py
             ;;
         *)
             echo "unknown service: $1"
