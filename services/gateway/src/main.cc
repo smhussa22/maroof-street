@@ -50,8 +50,16 @@ int main()
     PQclear(res);
     PQfinish(pg);
 
+    std::ifstream lua_file { "services/gateway/rate_limit.lua" };
+    if (!lua_file)
+    {
+        std::cerr << "failed to open rate_limit.lua\n";
+        return 1;
+    }
+    const std::string rate_limit_script { std::istreambuf_iterator<char>(lua_file), {} };
+
     const std::vector<std::string> symbols { "AAPL", "TSLA", "NVDA", "MSFT", "GOOGL" };
-    GatewayOrderService order_service { symbols, KAFKA_BROKERS, redis.get() };
+    GatewayOrderService order_service { symbols, KAFKA_BROKERS, redis.get(), rate_limit_script };
 
     grpc::EnableDefaultHealthCheckService(true);
     grpc::ServerBuilder builder;
