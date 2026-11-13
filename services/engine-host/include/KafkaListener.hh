@@ -28,12 +28,15 @@ public:
     void on_order_cancelled(uint64_t order_id);
     void on_order_rejected(uint64_t order_id, OrderRejected reason);
     void on_order_book_update(int32_t price, uint32_t volume, OrderDirection direction);
+    void set_replay(bool replay) { m_replay = replay; }
 
 private:
 
     KafkaPublisher<4096>& m_publisher;
     std::string m_symbol;
     uint64_t m_seq { 0 };
+    bool m_replay { false }; 
+
 
     maroof_street::events::ExchangeEvent make_event();
 
@@ -107,6 +110,10 @@ inline void KafkaListener::on_trade(uint64_t aggressor_id, uint64_t passive_id, 
 
     std::string bytes;
     event.SerializeToString(&bytes);
+    if (m_replay) 
+    {
+        return;
+    }
     m_publisher.publish(bytes);
 
 }
@@ -119,6 +126,10 @@ inline void KafkaListener::on_order_added(uint64_t order_id, int32_t, uint32_t, 
 
     std::string bytes;
     event.SerializeToString(&bytes);
+    if (m_replay) 
+    {
+        return;
+    }
     m_publisher.publish(bytes);
 
 }
@@ -131,6 +142,10 @@ inline void KafkaListener::on_order_cancelled(uint64_t order_id)
 
     std::string bytes;
     event.SerializeToString(&bytes);
+    if (m_replay) 
+    {
+        return;
+    }
     m_publisher.publish(bytes);
 
 }
@@ -145,6 +160,10 @@ inline void KafkaListener::on_order_rejected(uint64_t order_id, OrderRejected re
 
     std::string bytes;
     event.SerializeToString(&bytes);
+    if (m_replay) 
+    {
+        return;
+    }
     m_publisher.publish(bytes);
 
 }
@@ -160,6 +179,10 @@ inline void KafkaListener::on_order_book_update(int32_t price, uint32_t volume, 
 
     std::string bytes;
     event.SerializeToString(&bytes);
+    if (m_replay) 
+    {
+        return;
+    }
     m_publisher.publish(bytes);
     
 }
