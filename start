@@ -46,12 +46,15 @@ start() {
                 DATABASE_URL="host=localhost dbname=exchange user=exchange password=exchange" \
                 KAFKA_BROKERS="localhost:9092" \
                 REDIS_URL="redis://localhost:6379" \
+                PYTHONPATH="services/ledger" \
                 /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/ledger/main.py
             ;;
         market-data)
             run market-data env \
                 KAFKA_BROKERS="localhost:9092" \
                 REDIS_URL="redis://localhost:6379" \
+                GRPC_LISTEN="0.0.0.0:50052" \
+                PYTHONPATH="services/ledger:services/market-data" \
                 /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/market-data/main.py
             ;;
         *)
@@ -63,10 +66,46 @@ start() {
     esac
 }
 
-if [ $# -eq 0 ]; then
+wait_for_port() {
+    local host="$1" port="$2" label="$3"
+    printf "waiting for %s..." "$label"
+    until nc -z "$host" "$port" 2>/dev/null; do sleep 1; printf "."; done
+    echo " ready"
+}
+
+if [ $# -eq 0 ] || [ "$1" = "help" ]; then
     echo "usage: ./start <service> [service ...]"
+    echo "       ./start all        — build + start everything in order"
+    echo "       ./start dev        — start everything (skip build)"
+    echo ""
     echo "services: infra engine-host gateway ledger market-data"
-    exit 1
+    exit 0
+fi
+
+if [ "$1" = "all" ] || [ "$1" = "dev" ]; then
+    if [ "$1" = "all" ]; then
+        echo "building..."
+        cmake --build build
+        echo "generating python proto stubs..."
+        /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 -m grpc_tools.protoc \
+            --python_out=services/ledger \
+            --grpc_python_out=services/ledger \
+            -Iproto \
+            proto/orders.proto proto/events.proto proto/market_data.proto
+    fi
+
+    start infra
+    wait_for_port localhost 9092 "kafka"
+    wait_for_port localhost 6379 "redis"
+    wait_for_port localhost 5432 "postgres"
+
+    start engine-host
+    start gateway
+    start ledger
+    start market-data
+
+    wait
+    exit 0
 fi
 
 for svc in "$@"; do
