@@ -1,16 +1,29 @@
 import os
+import time
 import psycopg2
 import redis as redis_lib
 from confluent_kafka import Consumer, KafkaError
 
-from events_pb2 import ExchangeEvent
-from orders_pb2 import SIDE_BUY
+from balances import expire_fak, release_remaining, settle_balances
+from events_pb2 import (
+    ExchangeEvent,
+    REJECTED_REASON_INVALID_PRICE,
+    REJECTED_REASON_INVALID_QUANTITY,
+    REJECTED_REASON_POOL_FULL,
+)
 
 SYMBOLS = ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"]
 
-DB_DSN        = os.getenv("DATABASE_URL", "host=localhost dbname=exchange user=exchange password=exchange")
+DB_DSN = os.getenv("DATABASE_URL", "host=localhost dbname=exchange user=exchange password=exchange")
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
-REDIS_URL     = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+SESSION = os.getenv("EXCHANGE_SESSION", "dev")
+
+FAK_SWEEP_SECS = 1
+
+# reasons that mean a submitted order never reached the book; duplicate-id and not-found rejects are left out
+# because their id can belong to a different live order
+SUBMIT_REJECTS = {REJECTED_REASON_INVALID_PRICE, REJECTED_REASON_INVALID_QUANTITY, REJECTED_REASON_POOL_FULL}
 
 
 def apply_schema(conn):
@@ -26,66 +39,15 @@ def settle(conn, r, event, fill):
     with conn.cursor() as cur:
         # idempotency: skip if already settled
         cur.execute(
-            "INSERT INTO trades (seq, symbol, aggressor_id, passive_id, price, quantity) "
-            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING seq",
-            (event.seq, symbol, fill.aggressor_id, fill.passive_id, fill.price, fill.quantity),
+            "INSERT INTO trades (session, seq, symbol, aggressor_id, passive_id, price, quantity) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING seq",
+            (SESSION, event.seq, symbol, fill.aggressor_id, fill.passive_id, fill.price, fill.quantity),
         )
         if cur.rowcount == 0:
             return
     conn.commit()
 
-    qty   = fill.quantity
-    price = fill.price
-
-    # look up account metadata for both sides
-    aggressor_meta = r.hgetall(f"order_meta:{symbol}:{fill.aggressor_id}")
-    passive_meta   = r.hgetall(f"order_meta:{symbol}:{fill.passive_id}")
-
-    # settle aggressor side
-    if aggressor_meta:
-        acc = aggressor_meta[b"account_id"].decode()
-        if fill.aggressor_side == SIDE_BUY:
-            # buyer: reserved cash consumed, gains shares
-            r.incrbyfloat(f"reserved:{acc}:cash",              -(price * qty))
-            r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
-        else:
-            # seller: reserved shares consumed, gains cash
-            r.incrbyfloat(f"reserved:{acc}:position:{symbol}",  -qty)
-            r.incrbyfloat(f"balance:{acc}:cash",                 price * qty)
-
-    # settle passive side (opposite direction)
-    if passive_meta:
-        acc = passive_meta[b"account_id"].decode()
-        if fill.aggressor_side == SIDE_BUY:
-            # passive is seller: reserved shares consumed, gains cash
-            r.incrbyfloat(f"reserved:{acc}:position:{symbol}",  -qty)
-            r.incrbyfloat(f"balance:{acc}:cash",                 price * qty)
-        else:
-            # passive is buyer: reserved cash consumed, gains shares
-            r.incrbyfloat(f"reserved:{acc}:cash",              -(price * qty))
-            r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
-
-
-def release_cancel(r, symbol, order_id):
-    meta = r.hgetall(f"order_meta:{symbol}:{order_id}")
-    if not meta:
-        return
-
-    acc   = meta[b"account_id"].decode()
-    price = int(meta[b"price"].decode())
-    qty   = int(meta[b"qty"].decode())
-    side  = meta[b"side"].decode()
-
-    if side == "buy":
-        # release remaining reserved cash back to available
-        r.incrbyfloat(f"reserved:{acc}:cash", -(price * qty))
-        r.incrbyfloat(f"balance:{acc}:cash",    price * qty)
-    else:
-        # release remaining reserved shares back to available
-        r.incrbyfloat(f"reserved:{acc}:position:{symbol}", -qty)
-        r.incrbyfloat(f"balance:{acc}:position:{symbol}",   qty)
-
-    r.delete(f"order_meta:{symbol}:{order_id}")
+    settle_balances(r, symbol, fill)
 
 
 def main():
@@ -101,10 +63,16 @@ def main():
     })
     consumer.subscribe([f"events.{s}" for s in SYMBOLS])
 
-    print("ledger running")
+    print("ledger running", flush=True)
 
+    last_sweep = 0.0
     try:
         while True:
+            # release the unfilled remainder of FAK orders whose grace period has passed
+            if time.time() - last_sweep >= FAK_SWEEP_SECS:
+                expire_fak(r)
+                last_sweep = time.time()
+
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
@@ -119,7 +87,9 @@ def main():
             if event.HasField("trade_fill"):
                 settle(conn, r, event, event.trade_fill)
             elif event.HasField("cancel"):
-                release_cancel(r, event.symbol, event.cancel.order_id)
+                release_remaining(r, event.symbol, event.cancel.order_id)
+            elif event.HasField("reject") and event.reject.reason in SUBMIT_REJECTS:
+                release_remaining(r, event.symbol, event.reject.order_id)
 
     finally:
         consumer.close()

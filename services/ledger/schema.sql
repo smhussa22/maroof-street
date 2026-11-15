@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS trades (
     PRIMARY KEY (seq, symbol)
 );
 
+-- the engine's seq restarts every session while this table persists, so a trade is identified by (session, seq, symbol);
+-- without the session, a new session's first fills would collide with old rows and be skipped as already settled
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS session TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_pkey;
+ALTER TABLE trades ADD CONSTRAINT trades_pkey PRIMARY KEY (session, seq, symbol);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session    TEXT        PRIMARY KEY,
+    opened_at  TIMESTAMPTZ,
+    closed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    trades     BIGINT      NOT NULL,
+    volume     BIGINT      NOT NULL,
+    traders    JSONB       NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS api_keys (
     key_hash   CHAR(64)    PRIMARY KEY,  -- SHA-256 hex digest of the raw API key
     account_id INT         NOT NULL REFERENCES accounts(account_id)
