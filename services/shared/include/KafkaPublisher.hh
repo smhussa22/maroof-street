@@ -61,6 +61,9 @@ inline KafkaPublisher<N>::KafkaPublisher(std::string_view topic, std::string_vie
     std::string errstr;
     auto* conf { RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL) };
     conf->set("bootstrap.servers", std::string(brokers), errstr);
+
+    // send each message right away; the default waits up to 5 ms to batch, which is most of the order-to-fill latency
+    conf->set("linger.ms", "0", errstr);
     m_producer.reset(RdKafka::Producer::create(conf, errstr));
     delete conf;
 
