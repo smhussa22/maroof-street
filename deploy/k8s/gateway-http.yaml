@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-http
+  namespace: maroof-street
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway-http
+  template:
+    metadata:
+      labels:
+        app: gateway-http
+    spec:
+      containers:
+        - name: gateway-http
+          image: ghcr.io/smhussa22/maroof-street/gateway-http:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DEMO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: DEMO_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-http
+  namespace: maroof-street
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  selector:
+    app: gateway-http
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

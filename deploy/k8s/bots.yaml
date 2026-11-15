@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-maker
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-maker
+  template:
+    metadata:
+      labels:
+        app: market-maker
+    spec:
+      containers:
+        - name: market-maker
+          image: ghcr.io/smhussa22/maroof-street/bots:latest
+          command: ["python3", "market_maker.py"]
+          env:
+            - name: MM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: MM_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-momentum-bot
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-momentum-bot
+  template:
+    metadata:
+      labels:
+        app: go-momentum-bot
+    spec:
+      containers:
+        - name: go-momentum-bot
+          image: ghcr.io/smhussa22/maroof-street/go-bot:latest
+          env:
+            - name: GO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: GO_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rust-mean-rev-bot
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rust-mean-rev-bot
+  template:
+    metadata:
+      labels:
+        app: rust-mean-rev-bot
+    spec:
+      containers:
+        - name: rust-mean-rev-bot
+          image: ghcr.io/smhussa22/maroof-street/rust-bot:latest
+          env:
+            - name: RUST_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: RUST_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-twap-bot
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-twap-bot
+  template:
+    metadata:
+      labels:
+        app: java-twap-bot
+    spec:
+      containers:
+        - name: java-twap-bot
+          image: ghcr.io/smhussa22/maroof-street/java-bot:latest
+          env:
+            - name: JAVA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: JAVA_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: random-trader
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: random-trader
+  template:
+    metadata:
+      labels:
+        app: random-trader
+    spec:
+      containers:
+        - name: random-trader
+          image: ghcr.io/smhussa22/maroof-street/bots:latest
+          command: ["python3", "random_trader.py"]
+          env:
+            - name: RT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: exchange-secrets
+                  key: RT_API_KEY
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"

@@ -1,0 +1,178 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-host-aapl
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-host
+      symbol: AAPL
+  template:
+    metadata:
+      labels:
+        app: engine-host
+        symbol: AAPL
+    spec:
+      containers:
+        - name: engine-host
+          image: ghcr.io/smhussa22/maroof-street/engine-host:latest
+          env:
+            - name: SYMBOL
+              value: "AAPL"
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "512Mi"
+          affinity:
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 1
+                  preference:
+                    matchExpressions:
+                      - key: node.kubernetes.io/instance-type
+                        operator: In
+                        values: ["c6i.xlarge", "c6i.2xlarge"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-host-tsla
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-host
+      symbol: TSLA
+  template:
+    metadata:
+      labels:
+        app: engine-host
+        symbol: TSLA
+    spec:
+      containers:
+        - name: engine-host
+          image: ghcr.io/smhussa22/maroof-street/engine-host:latest
+          env:
+            - name: SYMBOL
+              value: "TSLA"
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "512Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-host-nvda
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-host
+      symbol: NVDA
+  template:
+    metadata:
+      labels:
+        app: engine-host
+        symbol: NVDA
+    spec:
+      containers:
+        - name: engine-host
+          image: ghcr.io/smhussa22/maroof-street/engine-host:latest
+          env:
+            - name: SYMBOL
+              value: "NVDA"
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "512Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-host-msft
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-host
+      symbol: MSFT
+  template:
+    metadata:
+      labels:
+        app: engine-host
+        symbol: MSFT
+    spec:
+      containers:
+        - name: engine-host
+          image: ghcr.io/smhussa22/maroof-street/engine-host:latest
+          env:
+            - name: SYMBOL
+              value: "MSFT"
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "512Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-host-googl
+  namespace: maroof-street
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-host
+      symbol: GOOGL
+  template:
+    metadata:
+      labels:
+        app: engine-host
+        symbol: GOOGL
+    spec:
+      containers:
+        - name: engine-host
+          image: ghcr.io/smhussa22/maroof-street/engine-host:latest
+          env:
+            - name: SYMBOL
+              value: "GOOGL"
+          envFrom:
+            - configMapRef:
+                name: exchange-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "512Mi"

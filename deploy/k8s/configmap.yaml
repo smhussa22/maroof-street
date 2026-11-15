@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maroof-street
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exchange-config
+  namespace: maroof-street
+data:
+  KAFKA_BROKERS: "kafka-kafka-bootstrap.maroof-street.svc.cluster.local:9092"
+  REDIS_URL:     "redis://redis-master.maroof-street.svc.cluster.local:6379"
+  DATABASE_URL:  "host=postgres-postgresql.maroof-street.svc.cluster.local dbname=exchange user=exchange"
+  GATEWAY_ADDR:  "gateway.maroof-street.svc.cluster.local:50051"
+  GRPC_LISTEN:   "0.0.0.0:50051"
