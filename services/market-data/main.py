@@ -86,6 +86,12 @@ def handle_trade_fill(r: redis.Redis, event: ExchangeEvent) -> None:
     pipe.execute()
 
 
+def book_levels(r: redis.Redis, sym: str, side: str, n: int) -> list[tuple[int, int]]:
+    """(price, volume) best first. The zset maps price -> volume, so Redis' own score order is volume order, not price order."""
+    raw = r.zrange(f"md:{sym}:depth:{side}", 0, -1, withscores=True)
+    return sorted(((int(p), int(v)) for p, v in raw), reverse=(side == "bid"))[:n]
+
+
 # update depth and top-of-book for a single price level change
 def handle_book_update(r: redis.Redis, event: ExchangeEvent) -> None:
     update = event.book_update
@@ -100,22 +106,21 @@ def handle_book_update(r: redis.Redis, event: ExchangeEvent) -> None:
         pipe.zadd(key, {str(update.price): update.volume})
     pipe.execute()
 
-    # recompute top of book outside pipeline (needs results)
-    best_bid = r.zrevrange(f"md:{sym}:depth:bid", 0, 0, withscores=True)
-    best_ask = r.zrange(f"md:{sym}:depth:ask", 0, 0, withscores=True)
+    # recompute top of book outside pipeline (needs results); rewritten whole so an emptied side doesn't keep a stale price
+    bids = book_levels(r, sym, "bid", 1)
+    asks = book_levels(r, sym, "ask", 1)
 
     top = {}
-    if best_bid:
-        price, vol = best_bid[0]
-        top["best_bid"] = price
-        top["bid_qty"]  = int(vol)
-    if best_ask:
-        price, vol = best_ask[0]
-        top["best_ask"] = price
-        top["ask_qty"]  = int(vol)
+    if bids:
+        top["best_bid"], top["bid_qty"] = bids[0]
+    if asks:
+        top["best_ask"], top["ask_qty"] = asks[0]
 
+    pipe = r.pipeline()
+    pipe.delete(f"md:{sym}:top")
     if top:
-        r.hset(f"md:{sym}:top", mapping=top)
+        pipe.hset(f"md:{sym}:top", mapping=top)
+    pipe.execute()
 
 
 # ── gRPC servicer ────────────────────────────────────────────────────────────
@@ -151,14 +156,8 @@ class MarketDataServicer(market_data_pb2_grpc.MarketDataServicer):
         snapshot_sent = False
 
         while context.is_active():
-            raw_bids = {
-                p.decode(): s for p, s in
-                self.r.zrevrange(f"md:{sym}:depth:bid", 0, levels - 1, withscores=True)
-            }
-            raw_asks = {
-                p.decode(): s for p, s in
-                self.r.zrange(f"md:{sym}:depth:ask", 0, levels - 1, withscores=True)
-            }
+            raw_bids = {str(p): v for p, v in book_levels(self.r, sym, "bid", levels)}
+            raw_asks = {str(p): v for p, v in book_levels(self.r, sym, "ask", levels)}
 
             if not snapshot_sent:
                 yield market_data_pb2.DepthUpdate(
