@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package maroof_street.orders;
 
+option go_package = "maroof-street/bots/go/pb";
+
 // i really wish i just called this side in the matching engien but i have to stick with "order direction" now
 enum OrderDirection
 {

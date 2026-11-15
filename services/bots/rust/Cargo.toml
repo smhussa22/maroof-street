@@ -1,0 +1,17 @@
+[package]
+name = "rust-bot"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rust-bot"
+path = "src/main.rs"
+
+[dependencies]
+tonic = "0.12"
+prost = "0.13"
+tokio = { version = "1", features = ["full"] }
+redis = { version = "0.26", features = ["tokio-comp"] }
+
+[build-dependencies]
+tonic-build = "0.12"

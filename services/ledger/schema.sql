@@ -31,18 +31,44 @@ CREATE TABLE IF NOT EXISTS api_keys (
     account_id INT         NOT NULL REFERENCES accounts(account_id)
 );
 
--- TODO: remove before production; test accounts and keys only
 INSERT INTO accounts (account_id, name) VALUES
     (1, 'alice'),
-    (2, 'bob')
+    (2, 'bob'),
+    (3, 'market-maker'),
+    (4, 'random-trader'),
+    (5, 'demo'),
+    (6, 'go-momentum'),
+    (7, 'rust-mean-reversion'),
+    (8, 'java-twap')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO balances (account_id, cash) VALUES
     (1, 100000),
-    (2, 100000)
+    (2, 100000),
+    (3, 10000000),
+    (4, 5000000),
+    (5, 1000000),
+    (6, 5000000),
+    (7, 5000000),
+    (8, 10000000)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO positions (account_id, symbol, quantity) VALUES
+    (3, 'AAPL',  10000), (3, 'TSLA',  10000), (3, 'NVDA',  10000), (3, 'MSFT',  10000), (3, 'GOOGL',  10000),
+    (4, 'AAPL',  5000),  (4, 'TSLA',  5000),  (4, 'NVDA',  5000),  (4, 'MSFT',  5000),  (4, 'GOOGL',  5000),
+    (5, 'AAPL',  500),   (5, 'TSLA',  500),   (5, 'NVDA',  500),   (5, 'MSFT',  500),   (5, 'GOOGL',  500),
+    (6, 'AAPL',  5000),  (6, 'TSLA',  5000),  (6, 'NVDA',  5000),  (6, 'MSFT',  5000),  (6, 'GOOGL',  5000),
+    (7, 'AAPL',  5000),  (7, 'TSLA',  5000),  (7, 'NVDA',  5000),  (7, 'MSFT',  5000),  (7, 'GOOGL',  5000),
+    (8, 'AAPL',  10000), (8, 'TSLA',  10000), (8, 'NVDA',  10000), (8, 'MSFT',  10000), (8, 'GOOGL',  10000)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO api_keys (key_hash, account_id) VALUES
-    (encode(sha256('alice-key-123'), 'hex'), 1),
-    (encode(sha256('bob-key-456'),   'hex'), 2)
+    (encode(sha256('alice-key-123'),    'hex'), 1),
+    (encode(sha256('bob-key-456'),      'hex'), 2),
+    (encode(sha256('mm-bot-key-111'),   'hex'), 3),
+    (encode(sha256('rt-bot-key-222'),   'hex'), 4),
+    (encode(sha256('demo-key-789'),     'hex'), 5),
+    (encode(sha256('go-bot-key-333'),   'hex'), 6),
+    (encode(sha256('rust-bot-key-444'), 'hex'), 7),
+    (encode(sha256('java-bot-key-555'), 'hex'), 8)
 ON CONFLICT DO NOTHING;
