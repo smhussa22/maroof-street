@@ -24,25 +24,65 @@ POLL_INTERVAL = 0.1  # seconds between Redis polls for streaming RPCs
 #   md:{symbol}:top        -> hash  { best_bid, bid_qty, best_ask, ask_qty }
 #   md:{symbol}:depth:bid  -> zset  price -> volume  (bids, highest price = best)
 #   md:{symbol}:depth:ask  -> zset  price -> volume  (asks, lowest price = best)
-#   md:{symbol}:trades     -> list  (capped at 100) of JSON { price, qty, side, ts_ns }
+#   md:{symbol}:trades     -> list  (capped at 100) of JSON { symbol, price, qty, side, ts_ns, taker, maker, taker_id, maker_id }
+#   md:tape                -> list  (capped at 200) same JSON, all symbols merged
+#   md:stats               -> hash  { trades, volume }
+#   md:trader:{name}       -> hash  { trades, volume, last_ts_ms }
 
 
-# append the trade to the trade tape for this symbol
+ACCOUNTS = {
+    1: "Alice", 2: "Bob", 3: "Market Maker", 4: "Random Trader", 5: "Visitor",
+    6: "Go Momentum", 7: "Rust Mean-Reversion", 8: "Java TWAP",
+}
+# 100k client order id block each trader owns (the engine only has 1,000,000 id slots);
+# used when order_meta is already gone (cancelled order)
+ID_BLOCK = 100_000
+ID_RANGES = [(100_000, 3), (200_000, 4), (300_000, 6), (400_000, 7), (500_000, 8), (600_000, 5)]
+
+
+def trader_name(r: redis.Redis, sym: str, order_id: int) -> str | None:
+    acc = r.hget(f"order_meta:{sym}:{order_id}", "account_id")
+    if acc:
+        return ACCOUNTS.get(int(acc))
+    for base, account_id in ID_RANGES:
+        if base <= order_id < base + ID_BLOCK:
+            return ACCOUNTS[account_id]
+    return None
+
+
+# append the trade to the per-symbol tape and the global tape, and bump the day counters
 def handle_trade_fill(r: redis.Redis, event: ExchangeEvent) -> None:
     fill = event.trade_fill
     sym  = event.symbol
     side = "buy" if fill.aggressor_side == SIDE_BUY else "sell"
+    taker = trader_name(r, sym, fill.aggressor_id)
+    maker = trader_name(r, sym, fill.passive_id)
 
     trade = json.dumps({
-        "price":  fill.price,
-        "qty":    fill.quantity,
-        "side":   side,
-        "ts_ns":  event.ts_ns,
+        "symbol":   sym,
+        "price":    fill.price,
+        "qty":      fill.quantity,
+        "side":     side,
+        "ts_ns":    event.ts_ns,
+        "ts_ms":    int(time.time() * 1000),  # wall clock; ts_ns is engine-local so the UI can't age trades with it
+        "taker":    taker,
+        "maker":    maker,
+        "taker_id": fill.aggressor_id,
+        "maker_id": fill.passive_id,
     })
 
     pipe = r.pipeline()
     pipe.lpush(f"md:{sym}:trades", trade)
     pipe.ltrim(f"md:{sym}:trades", 0, 99)
+    pipe.lpush("md:tape", trade)
+    pipe.ltrim("md:tape", 0, 199)
+    pipe.hincrby("md:stats", "trades", 1)
+    pipe.hincrby("md:stats", "volume", fill.quantity)
+    for name in (taker, maker):
+        if name:
+            pipe.hincrby(f"md:trader:{name}", "trades", 1)
+            pipe.hincrby(f"md:trader:{name}", "volume", fill.quantity)
+            pipe.hset(f"md:trader:{name}", "last_ts_ms", int(time.time() * 1000))
     pipe.execute()
 
 
