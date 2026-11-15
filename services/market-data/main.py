@@ -258,6 +258,8 @@ def run_kafka(r: redis.Redis) -> None:
 
 def main() -> None:
     r = redis.from_url(REDIS_URL)
+    r.set("exchange:session", os.getenv("EXCHANGE_SESSION", "dev"))
+    r.set("exchange:opened_at_ms", int(time.time() * 1000), nx=True)
 
     kafka_thread = threading.Thread(target=run_kafka, args=(r,), daemon=True)
     kafka_thread.start()
