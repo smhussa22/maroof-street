@@ -32,7 +32,7 @@ message SubmitOrder
     uint32 quantity = 4; // number of units (shares) to buy or sell
     OrderDirection order_direction = 5; // which side of the book: buy or sell
     OrderType order_type = 6; // gtc or fak
-    uint64 client_order_id = 7; // caller-assigned ID echoed back in events so the client can match responses to the order it sent
+    uint64 client_order_id = 7; // caller-assigned ID echoed back in events so the client can match responses to the order it sent; must be below 1,000,000 (the engine's id-slot limit) and unique among the caller's live orders
 
 }
 

@@ -112,6 +112,20 @@ inline void release(redisContext* redis_ctx, const std::string& balance_key,
     };
 }
 
+// the engine indexes live orders by id in a fixed array (OrderBook::MAX_PRICE slots); a larger id is rejected on
+// submit and reads out of bounds on cancel, which takes the engine-host down
+constexpr uint64_t MAX_ORDER_ID { 1'000'000 };
+
+// how long after submission the ledger may release the unfilled remainder of a FAK order
+constexpr long long FAK_GRACE_MS { 3'000 };
+
+inline long long epoch_ms()
+{
+
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+}
+
 // hashes the x-api-key header with SHA-256, looks it up in Redis, returns the account_id or nullopt
 inline std::optional<int> lookup_account(redisContext* redis_ctx, grpc::ServerContext* grpc_ctx)
 {
@@ -153,6 +167,9 @@ inline grpc::Status GatewayOrderService::submit_order(grpc::ServerContext* grpc_
     if (!account_id)
         return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "invalid or missing api key");
 
+    if (request->client_order_id() >= MAX_ORDER_ID)
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "client_order_id must be below 1000000");
+
     if (!check_rate_limit(m_redis, m_rate_limit_script, *account_id))
         return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "rate limit exceeded");
 
@@ -176,12 +193,21 @@ inline grpc::Status GatewayOrderService::submit_order(grpc::ServerContext* grpc_
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "insufficient shares");
     }
 
-    // store order metadata so the ledger can map order_id -> account for balance settlement
+    // store order metadata so the ledger can map order_id -> account and track how much of the reservation is still held
     const std::string meta_key = "order_meta:" + sym + ":" + std::to_string(request->client_order_id());
     const std::string side_str = (request->order_direction() == maroof_street::orders::SIDE_BUY) ? "buy" : "sell";
-    redisCommand(m_redis, "HSET %s account_id %d price %d qty %u side %s",
-        meta_key.c_str(), *account_id, request->price(), request->quantity(), side_str.c_str());
+    redisCommand(m_redis, "HSET %s account_id %d price %d qty %u remaining %u side %s",
+        meta_key.c_str(), *account_id, request->price(), request->quantity(), request->quantity(), side_str.c_str());
     redisCommand(m_redis, "EXPIRE %s 86400", meta_key.c_str());
+
+    // the engine never reports the unfilled remainder of a FAK order, so the ledger releases it after a grace period
+    if (request->order_type() == maroof_street::orders::ORDER_TYPE_FAK)
+    {
+
+        redisCommand(m_redis, "ZADD fak_pending %lld %s:%llu",
+            epoch_ms() + FAK_GRACE_MS, sym.c_str(), static_cast<unsigned long long>(request->client_order_id()));
+
+    }
 
     maroof_street::orders::Command command;
     command.mutable_submit()->CopyFrom(*request);
@@ -193,6 +219,9 @@ inline grpc::Status GatewayOrderService::cancel_order(grpc::ServerContext* grpc_
     const auto account_id = lookup_account(m_redis, grpc_ctx);
     if (!account_id)
         return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "invalid or missing api key");
+
+    if (request->order_id() >= MAX_ORDER_ID)
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "order_id must be below 1000000");
 
     if (!check_rate_limit(m_redis, m_rate_limit_script, *account_id))
         return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "rate limit exceeded");
