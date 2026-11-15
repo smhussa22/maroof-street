@@ -36,7 +36,7 @@ start() {
             run infra docker-compose -f deploy/docker-compose.yml up
             ;;
         engine-host)
-            SYMBOL="${SYMBOL:-AAPL}" run engine-host ./build/services/engine-host/engine-host
+            SYMBOL="${SYMBOL:-AAPL}" run "engine-${SYMBOL:-AAPL}" ./build/services/engine-host/engine-host
             ;;
         gateway)
             run gateway ./build/services/gateway/gateway
@@ -57,13 +57,74 @@ start() {
                 PYTHONPATH="services/ledger:services/market-data" \
                 /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/market-data/main.py
             ;;
+        gateway-http)
+            run gateway-http env \
+                GATEWAY_ADDR="localhost:50051" \
+                REDIS_URL="redis://localhost:6379" \
+                DEMO_API_KEY="demo-key-789" \
+                PROXY_SECRET="${EXCHANGE_PROXY_SECRET:-}" \
+                PYTHONPATH="services/ledger:services/gateway-http" \
+                /mnt/c/Users/faraz/maroof-street/.venv/bin/uvicorn \
+                    main:app --app-dir services/gateway-http --host 0.0.0.0 --port 8080
+            ;;
+        market-maker)
+            run market-maker env \
+                GATEWAY_ADDR="localhost:50051" \
+                REDIS_URL="redis://localhost:6379" \
+                MM_API_KEY="mm-bot-key-111" \
+                PYTHONPATH="services/ledger" \
+                /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/bots/market_maker.py
+            ;;
+        random-trader)
+            run random-trader env \
+                GATEWAY_ADDR="localhost:50051" \
+                REDIS_URL="redis://localhost:6379" \
+                RT_API_KEY="rt-bot-key-222" \
+                PYTHONPATH="services/ledger" \
+                /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 services/bots/random_trader.py
+            ;;
+        go-bot)
+            run go-bot env \
+                GATEWAY_ADDR="localhost:50051" \
+                REDIS_ADDR="localhost:6379" \
+                ./services/bots/go/go-bot
+            ;;
+        rust-bot)
+            run rust-bot env \
+                GATEWAY_ADDR="localhost:50051" \
+                REDIS_URL="redis://localhost:6379" \
+                ./services/bots/rust/target/release/rust-bot
+            ;;
+        java-bot)
+            # java lives on the Windows side in WSL; java.exe runs through interop
+            run java-bot \
+                "$(command -v java || command -v java.exe)" -jar services/bots/java/build/libs/java-twap-bot-1.0-all.jar
+            ;;
+        tunnel)
+            # publishes gateway-http (port 8080) on the public hostname of the named tunnel "maroof-street"
+            if ! command -v cloudflared >/dev/null; then
+                echo "cloudflared is not installed; see the tunnel setup steps in ./start help"
+                return 1
+            fi
+            run tunnel cloudflared tunnel run maroof-street
+            ;;
         *)
             echo "unknown service: $1"
             echo "usage: ./start <service> [service ...]"
-            echo "services: infra engine-host gateway ledger market-data"
+            echo "services: infra engine-host gateway ledger market-data gateway-http market-maker random-trader"
             exit 1
             ;;
     esac
+}
+
+# the broker port opens long before the broker accepts clients; engine-host dies if it starts in that gap
+wait_for_kafka() {
+    printf "waiting for kafka broker..."
+    until docker-compose -f deploy/docker-compose.yml exec -T kafka \
+        /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1; do
+        sleep 1; printf "."
+    done
+    echo " ready"
 }
 
 wait_for_port() {
@@ -77,8 +138,59 @@ if [ $# -eq 0 ] || [ "$1" = "help" ]; then
     echo "usage: ./start <service> [service ...]"
     echo "       ./start all        — build + start everything in order"
     echo "       ./start dev        — start everything (skip build)"
+    echo "       ./start stop       — closing bell: stop intake, settle, record the session, tear down"
+    echo "       ./start infra-up   — start Docker infra only"
+    echo "       ./start infra-down — stop Docker infra only"
+    echo "       TUNNEL=1 ./start dev — also publish gateway-http through the cloudflare tunnel"
     echo ""
-    echo "services: infra engine-host gateway ledger market-data"
+    echo "one-time tunnel setup (needs your cloudflare account, the DNS zone for your site):"
+    echo "  1. install cloudflared, then: cloudflared tunnel login"
+    echo "  2. cloudflared tunnel create maroof-street"
+    echo "  3. cloudflared tunnel route dns maroof-street exchange.<your-domain>"
+    echo "  4. put 'url: http://localhost:8080' for that hostname in ~/.cloudflared/config.yml"
+    echo "  5. export EXCHANGE_PROXY_SECRET=<long random string> before ./start, and set EXCHANGE_URL=https://exchange.<your-domain>,"
+    echo "     EXCHANGE_PROXY_SECRET (same value) and optionally MARKET_NEXT_OPEN on the website host"
+    echo ""
+    echo "services: infra engine-host gateway ledger market-data gateway-http"
+    echo "          market-maker random-trader go-bot rust-bot java-bot"
+    exit 0
+fi
+
+# closing bell: stop order intake, let the ledger and market-data catch up, record the session, then tear everything down
+if [ "$1" = "stop" ]; then
+    echo "ringing the closing bell: stopping order intake..."
+    for pattern in "cloudflared tunnel run" "services/bots/market_maker.py" "services/bots/random_trader.py" \
+                   "services/bots/go/go-bot" "services/bots/rust/target/release/rust-bot" \
+                   "java-twap-bot" "uvicorn" "build/services/gateway/gateway"; do
+        pkill -f "$pattern" 2>/dev/null || true
+    done
+    # the java bot is a Windows process under WSL interop; killing the relay does not always end it
+    command -v powershell.exe >/dev/null && powershell.exe -NoProfile -Command \
+        "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | Where-Object CommandLine -match 'java-twap-bot' | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" 2>/dev/null || true
+
+    echo "settling and recording the session..."
+    /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 scripts/market_close.py || echo "market_close failed; shutting down anyway"
+
+    for pattern in "build/services/engine-host/engine-host" "services/ledger/main.py" "services/market-data/main.py"; do
+        pkill -f "$pattern" 2>/dev/null || true
+    done
+    docker-compose -f deploy/docker-compose.yml down
+    echo "done"
+    exit 0
+fi
+
+if [ "$1" = "infra-up" ]; then
+    docker-compose -f deploy/docker-compose.yml up -d
+    wait_for_kafka
+    wait_for_port localhost 6379 "redis"
+    wait_for_port localhost 5432 "postgres"
+    echo "infra ready"
+    exit 0
+fi
+
+if [ "$1" = "infra-down" ]; then
+    docker-compose -f deploy/docker-compose.yml down
+    echo "infra stopped"
     exit 0
 fi
 
@@ -94,15 +206,34 @@ if [ "$1" = "all" ] || [ "$1" = "dev" ]; then
             proto/orders.proto proto/events.proto proto/market_data.proto
     fi
 
+    # one id per start; the ledger keys trades by it because engine seq numbers restart every session
+    export EXCHANGE_SESSION="${EXCHANGE_SESSION:-$(date +%Y%m%d-%H%M%S)}"
+
     start infra
-    wait_for_port localhost 9092 "kafka"
+    wait_for_kafka
     wait_for_port localhost 6379 "redis"
     wait_for_port localhost 5432 "postgres"
 
-    start engine-host
+    for sym in AAPL TSLA NVDA MSFT GOOGL; do
+        SYMBOL="$sym" start engine-host
+    done
     start gateway
     start ledger
     start market-data
+    start gateway-http
+
+    wait_for_port localhost 50051 "gateway"
+
+    # TUNNEL=1 opens the exchange to the public site; leaving it unset keeps everything on this machine
+    if [ -n "${TUNNEL:-}" ]; then
+        start tunnel
+    fi
+
+    start market-maker
+    start random-trader
+    [ -f services/bots/go/go-bot ]           && start go-bot   || echo "go-bot not built, skipping"
+    [ -f services/bots/rust/target/release/rust-bot ] && start rust-bot || echo "rust-bot not built, skipping"
+    [ -f services/bots/java/build/libs/java-twap-bot-1.0-all.jar ] && start java-bot || echo "java-bot not built, skipping"
 
     wait
     exit 0
