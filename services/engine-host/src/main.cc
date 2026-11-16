@@ -11,16 +11,24 @@
 
 int main()
 {
-    // @todo add an environment block in docker-compose and k8s
     const char* symbol = std::getenv("SYMBOL");
+    if (!symbol || !*symbol)
+    {
+        std::cerr << "SYMBOL is not set\n";
+        return 1;
+    }
 
-    KafkaPublisher<4096> publisher { std::string("events.") + symbol, "localhost:9092" };
+    // overridable for containers and Kubernetes; the default suits a local run
+    const char* brokers_env = std::getenv("KAFKA_BROKERS");
+    const std::string brokers { (brokers_env && *brokers_env) ? brokers_env : brokers };
+
+    KafkaPublisher<4096> publisher { std::string("events.") + symbol, brokers };
     KafkaListener listener { publisher, symbol };
     OrderBook<KafkaListener> order_book { listener };
 
     std::string errstr;
     std::unique_ptr<RdKafka::Conf> conf { RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL) };
-    conf->set("bootstrap.servers", "localhost:9092", errstr);
+    conf->set("bootstrap.servers", brokers, errstr);
     conf->set("group.id", std::string("engine-host.") + symbol, errstr);
 
     std::unique_ptr<RdKafka::KafkaConsumer> consumer { RdKafka::KafkaConsumer::create(conf.get(), errstr) };
@@ -32,7 +40,7 @@ int main()
         std::string topic_name = std::string("commands.") + symbol;
 
         std::unique_ptr<RdKafka::Conf> rconf { RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL) };
-        rconf->set("bootstrap.servers", "localhost:9092", errstr);
+        rconf->set("bootstrap.servers", brokers, errstr);
         rconf->set("group.id", std::string("replay.") + symbol, errstr);
         std::unique_ptr<RdKafka::KafkaConsumer> rconsumer { RdKafka::KafkaConsumer::create(rconf.get(), errstr) };
 

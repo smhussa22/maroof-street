@@ -2,6 +2,7 @@
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -9,16 +10,23 @@
 #include "OrderService.hh"
 #include "Redis.hh"
 
-static constexpr const char* KAFKA_BROKERS  = "localhost:9092";
-static constexpr const char* GRPC_LISTEN    = "0.0.0.0:50051";
-static constexpr const char* POSTGRES_CONN  = "host=localhost dbname=exchange user=exchange password=exchange";
-static constexpr const char* REDIS_HOST     = "127.0.0.1";
-static constexpr int         REDIS_PORT     = 6379;
+// each setting can be overridden by an environment variable (containers, Kubernetes); the defaults suit a local run
+static std::string env_or(const char* name, const char* fallback)
+{
+    const char* value = std::getenv(name);
+    return (value && *value) ? value : fallback;
+}
+
+static const std::string KAFKA_BROKERS = env_or("KAFKA_BROKERS", "localhost:9092");
+static const std::string GRPC_LISTEN   = env_or("GRPC_LISTEN", "0.0.0.0:50051");
+static const std::string POSTGRES_CONN = env_or("DATABASE_URL", "host=localhost dbname=exchange user=exchange password=exchange");
+static const std::string REDIS_HOST    = env_or("REDIS_HOST", "127.0.0.1");
+static const int         REDIS_PORT    = std::stoi(env_or("REDIS_PORT", "6379"));
 
 int main()
 {
     // connect to Redis and verify
-    RedisContext redis { redisConnect(REDIS_HOST, REDIS_PORT), redisFree };
+    RedisContext redis { redisConnect(REDIS_HOST.c_str(), REDIS_PORT), redisFree };
     if (!redis || redis->err)
     {
         std::cerr << "redis connect failed: " << (redis ? redis->errstr : "null context") << "\n";
@@ -26,7 +34,7 @@ int main()
     }
 
     // load api key -> account_id mappings from Postgres into Redis at startup
-    PGconn* pg = PQconnectdb(POSTGRES_CONN);
+    PGconn* pg = PQconnectdb(POSTGRES_CONN.c_str());
     if (PQstatus(pg) != CONNECTION_OK)
     {
         std::cerr << "postgres connect failed: " << PQerrorMessage(pg) << "\n";
