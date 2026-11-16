@@ -1,9 +1,9 @@
 # progress
 
 ## Goals
-- public demo: a hosted page where anyone can submit a trade, see it accepted or rejected, and view an interactive diagram showing how the order matched (aggressor vs passive, price/qty, book state before and after)
-
-
+- public demo: a hosted page where anyone can submit a trade, see it accepted or rejected, and follow it through the system
+  - [x] page built on the personal site: live order book and depth chart, trade feed with trader names, order entry, a live order journey, and a market-closed state
+  - [ ] always-on hosting so visitors can use it without me running it
 
 ## Stage 0: Prerequisites
 - [x] expose `lob_engine` as a CMake INTERFACE library target
@@ -30,19 +30,23 @@
 - [x] SpscQueue — lock-free SPSC ring buffer, power-of-two capacity, cache-line aligned head/tail
 - [x] KafkaPublisher — publish() enqueues bytes onto SpscQueue; background drain thread calls rdkafka produce
 - [x] re-run engine benchmark with publisher attached — p99.9 under 1µs confirmed
+- [x] producers send immediately (`linger.ms=0`) instead of batching for 5 ms
 
 ## Stage 3: Settlement (ledger)
-- [x] Postgres schema — accounts, balances, positions, trades
-- [x] Python ledger consumes `events.<SYMBOL>`, applies fills to Postgres
-- [x] idempotent on seq — ON CONFLICT DO NOTHING on (seq, symbol) prevents double-settling
-- [x] verified end-to-end: grpcurl buy+sell → engine → events.AAPL → ledger → trades row in Postgres
-- [x] balance/position settlement — order_meta in Redis maps order_id → account_id; wired up in Stage 5
+- [x] Postgres schema — accounts, balances, positions, trades, sessions
+- [x] Python ledger consumes `events.<SYMBOL>`, records trades in Postgres
+- [x] idempotent — ON CONFLICT DO NOTHING on (session, seq, symbol); engine seq restarts every session, so the session is part of the key
+- [x] verified end-to-end: orders → engine → events → ledger → trades rows in Postgres, across several sessions
+- [x] balance/position settlement in Redis via `order_meta`
+- [ ] write balances and positions back to Postgres so they survive a restart (today they are re-seeded from the seed data on every start)
 
 ## Stage 4: Market data
 - [x] Python market-data service consumes `events.<SYMBOL>`
 - [x] maintains top of book, depth, last price, recent trades per symbol in Redis
 - [x] implements `MarketData` gRPC service — StreamTopOfBook, StreamDepth, StreamTrades
 - [x] first message on each stream is a full snapshot, subsequent are deltas
+- [x] trader attribution on every trade, a global trade tape, and session counters
+- [x] book levels sorted by price (they were sorted by volume)
 
 ## Stage 5: Gateway and risk
 - [x] gateway implements `SubmitOrder` and `CancelOrder` gRPC endpoints
@@ -53,30 +57,36 @@
 - [x] per-account rate limiting in Redis (token bucket Lua script, 100 token max, 10/sec refill)
 - [x] balance check in Redis before forwarding to Kafka — BUY reserves cash, SELL reserves shares via atomic Lua scripts
 - [x] balances and positions seeded from Postgres into Redis at gateway startup
-- [x] Redis balances kept in sync by ledger — fills consume reservations and credit the other side, cancels release remaining reservation
+- [x] client order ids must be below 1,000,000 (the engine's id-slot limit); the gateway rejects larger ones
+- [x] ledger gives back only what is still reserved on cancel, reject, partial fills and the unfilled remainder of FAK orders (unit-tested)
+- [ ] live check that money and shares are conserved across all accounts after a long run
 
-## Stage 6: Kubernetes (EKS)
-- [x] Deployments and Services for every component
-- [x] ConfigMaps and Secrets for config and credentials
-- [x] gRPC health check as readiness and liveness probes
-- [x] Kafka via Strimzi operator (3 brokers, RF=3), Redis and Postgres via Bitnami Helm charts
+## Stage 6: Kubernetes
+- [x] manifests: Deployments and Services for every component, namespace, ConfigMap, Secret template
+- [x] gRPC health checks as readiness and liveness probes (gateway, http gateway)
 - [x] one engine-host Deployment per symbol (SYMBOL env var), c6i node affinity
-- [x] gateway HPA — scales 2→10 on CPU + gRPC connection count
-- [x] AWS NLB exposes gateway; EBS gp3 for all persistent volumes
-- [x] Cluster Autoscaler for node scaling across 3 AZs
+- [x] load balancer annotations on the gateway and http gateway
+- [ ] Dockerfiles for the other services, and images built and pushed
+- [ ] Kafka via Strimzi, Redis and Postgres via Bitnami Helm charts
+- [ ] gateway HPA, EBS volumes, cluster autoscaler
+- [ ] actually deployed to a cluster
 
 ## Stage 7: Crash recovery
-- [x] engine-host replays `events.<SYMBOL>` from last committed offset on startup to rebuild book
-- [x] kill-the-pod demo: Kubernetes restarts engine, book rebuilds, trading resumes, no lost trades
-- [x] ledger balances conserved across crash and recovery
+- [x] engine-host replays `commands.<SYMBOL>` from offset 0 on startup to rebuild the book, without republishing events
+- [ ] kill-and-restart test: book identical before and after, trading resumes
+- [ ] ledger balances conserved across a crash and recovery
 
 ## Stage 8: Frontend and bots
-- [x] React UI — live order book, trade tape, price chart, order entry, positions and balance
-- [x] bots — market maker and random trader anchored to live Polygon.io prices
+- [x] demo page on the personal site (not a separate React app): order book, depth chart, trade feed, order entry, order journey, trader cards
+- [x] bots in four languages: market maker and random trader (Python), momentum (Go), mean reversion (Rust), TWAP (Java)
 - [x] symbols: AAPL, TSLA, NVDA, MSFT, GOOGL
+- [x] closing bell: `./start stop` settles, records the session and tears everything down
+- [ ] bots anchored to live prices (they use fixed reference prices today)
 
 ## Stage 9: Observability and benchmarks
-- [x] Prometheus metrics — orders/sec, latency, Kafka consumer lag, rejects
-- [x] Grafana dashboards
-- [x] load test — p99.9 end-to-end latency under 1µs on engine hot path
-- [x] architecture diagram and results table in README
+- [x] engine hot path: 99.9% of orders matched in under 1µs
+- [x] end-to-end order-to-fill latency (gateway → Kafka → engine → Kafka): p50 2.7 ms, p99 4.6 ms over 1,000 orders, one machine over loopback (`scripts/latency_bench.sh`)
+- [ ] Prometheus metrics — orders/sec, latency, Kafka consumer lag, rejects
+- [ ] Grafana dashboards
+- [ ] throughput test through the whole system
+- [ ] architecture diagram and results table in README
