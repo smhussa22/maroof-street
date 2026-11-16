@@ -2,3 +2,4 @@ confluent-kafka
 psycopg2-binary
 protobuf
 redis
+prometheus-client

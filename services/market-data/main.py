@@ -6,6 +6,9 @@ import redis
 import grpc
 from concurrent import futures
 from confluent_kafka import Consumer, KafkaError
+from prometheus_client import Counter
+
+from metrics_util import LAG, consumer_lag, serve_metrics
 
 from events_pb2 import ExchangeEvent
 from orders_pb2 import SIDE_BUY
@@ -32,12 +35,12 @@ POLL_INTERVAL = 0.1  # seconds between Redis polls for streaming RPCs
 
 ACCOUNTS = {
     1: "Alice", 2: "Bob", 3: "Market Maker", 4: "Random Trader", 5: "Visitor",
-    6: "Go Momentum", 7: "Rust Mean-Reversion", 8: "Java TWAP",
+    6: "Go Momentum", 7: "Rust Mean-Reversion", 8: "Java TWAP", 9: "Demo Liquidity",
 }
 # 100k client order id block each trader owns (the engine only has 1,000,000 id slots);
 # used when order_meta is already gone (cancelled order)
 ID_BLOCK = 100_000
-ID_RANGES = [(100_000, 3), (200_000, 4), (300_000, 6), (400_000, 7), (500_000, 8), (600_000, 5)]
+ID_RANGES = [(100_000, 3), (200_000, 4), (300_000, 6), (400_000, 7), (500_000, 8), (600_000, 5), (800_000, 9)]
 
 
 def trader_name(r: redis.Redis, sym: str, order_id: int) -> str | None:
@@ -225,6 +228,9 @@ class MarketDataServicer(market_data_pb2_grpc.MarketDataServicer):
 
 # ── Kafka consumer thread ─────────────────────────────────────────────────────
 
+EVENTS = Counter("market_data_events_total", "Events the market data service handled", ["kind"])
+LAG_REPORT_SECS = 5
+
 def run_kafka(r: redis.Redis) -> None:
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKERS,
@@ -233,8 +239,12 @@ def run_kafka(r: redis.Redis) -> None:
     })
     consumer.subscribe([f"events.{s}" for s in SYMBOLS])
 
+    last_lag = 0.0
     try:
         while True:
+            if time.time() - last_lag >= LAG_REPORT_SECS:
+                LAG.labels("market-data").set(consumer_lag(consumer))
+                last_lag = time.time()
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
@@ -248,8 +258,10 @@ def run_kafka(r: redis.Redis) -> None:
 
             if event.HasField("trade_fill"):
                 handle_trade_fill(r, event)
+                EVENTS.labels("trade").inc()
             elif event.HasField("book_update"):
                 handle_book_update(r, event)
+                EVENTS.labels("book_update").inc()
     finally:
         consumer.close()
 
@@ -257,6 +269,7 @@ def run_kafka(r: redis.Redis) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    serve_metrics(9102)
     r = redis.from_url(REDIS_URL)
     r.set("exchange:session", os.getenv("EXCHANGE_SESSION", "dev"))
     r.set("exchange:opened_at_ms", int(time.time() * 1000), nx=True)
