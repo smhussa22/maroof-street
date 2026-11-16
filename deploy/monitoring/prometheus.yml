@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: gateway-http
+    metrics_path: /metrics/
+    static_configs: [{ targets: ["gateway-http:8080"] }]
+  - job_name: ledger
+    static_configs: [{ targets: ["ledger:9101"] }]
+  - job_name: market-data
+    static_configs: [{ targets: ["market-data:9102"] }]
