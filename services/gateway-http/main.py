@@ -2,6 +2,8 @@ import hmac
 import os
 import sys
 import json
+import re
+import threading
 import time
 from typing import Literal
 
@@ -11,12 +13,14 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import Counter, Histogram, make_asgi_app
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ledger'))
 
 from orders_pb2 import SubmitOrder, ORDER_TYPE_GTC, ORDER_TYPE_FAK, SIDE_BUY, SIDE_SELL
 import orders_pb2_grpc
+import wallet
 from market import REF_PRICES, price_band, summarize
 
 GATEWAY_ADDR = os.getenv("GATEWAY_ADDR", "localhost:50051")
@@ -30,9 +34,21 @@ ORDER_ID_BASE  = 600_000  # market-data's ID_RANGES maps this 100k block to "Vis
 ORDER_ID_BLOCK = 100_000  # the engine only has 1,000,000 id slots, so ids wrap inside the block
 COOLDOWN_SECS = 3
 HOURLY_LIMIT  = 30
+HOUSE_API_KEY = os.getenv("HOUSE_API_KEY", "house-key-999")
+HOUSE_ID_BASE = 800_000  # market-data's ID_RANGES maps this block to "Demo Liquidity"
+HOUSE_WAIT_SECS = 0.4    # how long a visitor order gets to fill against the real book before the house steps in
+SETTLE_TRIES = 24
+VISITOR_ID = re.compile(r"^[0-9a-f-]{36}$")
+
+ORDERS = Counter("exchange_orders_total", "Visitor orders by outcome", ["result"])
+SUBMIT_SECONDS = Histogram("exchange_submit_seconds", "Time for the order gateway to answer a submitted order",
+                           buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1))
+HOUSE_FILLS = Counter("exchange_house_orders_total", "Orders the demo liquidity account placed to complete a visitor order")
+
 TRADERS = ["Market Maker", "Random Trader", "Go Momentum", "Rust Mean-Reversion", "Java TWAP", "Visitor"]
 
 app = FastAPI()
+app.mount("/metrics", make_asgi_app())
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -86,44 +102,130 @@ def reference_price(symbol: str) -> int:
     return json.loads(latest)["price"] if latest else REF_PRICES[symbol]
 
 
+def visitor_of(header: str, ip: str) -> str:
+    # the website sends an anonymous id per browser; anything else falls back to one wallet per address
+    return header if VISITOR_ID.match(header) else f"ip-{ip}"
+
+
+def fills_for(symbol: str, order_id: int) -> list[dict]:
+    """Every fill of one order from the recent tape, oldest first."""
+    out = []
+    for t in reversed(last_trades(symbol)):
+        if order_id not in (t.get("taker_id"), t.get("maker_id")):
+            continue
+        mine_is_taker = t.get("taker_id") == order_id
+        other_id = t.get("maker_id") if mine_is_taker else t.get("taker_id")
+        out.append({
+            "price": t["price"], "qty": t["qty"], "ts_ms": t.get("ts_ms"),
+            "counterparty": t.get("maker") if mine_is_taker else t.get("taker"),
+            "house": other_id is not None and HOUSE_ID_BASE <= other_id < HOUSE_ID_BASE + ORDER_ID_BLOCK,
+        })
+    return out
+
+
+def house_order(symbol: str, side: str, price: int, qty: int) -> None:
+    """Takes the other side of a visitor order at the visitor's price, so every demo order completes the full path."""
+    house_id = HOUSE_ID_BASE + r.incr("demo:house_id") % ORDER_ID_BLOCK
+    req = SubmitOrder(
+        api_key         = HOUSE_API_KEY,
+        symbol          = symbol,
+        price           = price,
+        quantity        = qty,
+        order_direction = SIDE_SELL if side == "buy" else SIDE_BUY,
+        order_type      = ORDER_TYPE_GTC,
+        client_order_id = house_id,
+    )
+    stub.submit_order(req, metadata=[("x-api-key", HOUSE_API_KEY)], timeout=5)
+    HOUSE_FILLS.inc()
+
+
+def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int, qty: int) -> None:
+    """Background: let the real book fill the order, cover whatever is left with the house, then settle the wallet."""
+    try:
+        time.sleep(HOUSE_WAIT_SECS)
+        if sum(f["qty"] for f in fills_for(symbol, order_id)) < qty:
+            remaining = qty - sum(f["qty"] for f in fills_for(symbol, order_id))
+            if remaining > 0:
+                house_order(symbol, side, price, remaining)
+        for _ in range(SETTLE_TRIES):
+            fills = fills_for(symbol, order_id)
+            wallet.settle(r, visitor, order_id, fills, now_ms=int(time.time() * 1000))
+            if sum(f["qty"] for f in fills) >= qty:
+                return
+            time.sleep(0.25)
+    except Exception as e:  # a failed background step must never take the service down
+        print(f"finish_order {symbol} {order_id} failed: {e}", flush=True)
+
+
 @app.post("/order")
-def submit_order(body: OrderRequest, x_client_ip: str = Header("unknown"), x_proxy_secret: str = Header("")):
+def submit_order(
+    body: OrderRequest,
+    x_client_ip: str = Header("unknown"),
+    x_proxy_secret: str = Header(""),
+    x_visitor_id: str = Header(""),
+):
     # X-Client-IP drives the rate limit, so only the website's server (which knows the secret) may set it
     if PROXY_SECRET and not hmac.compare_digest(x_proxy_secret, PROXY_SECRET):
         return JSONResponse({"accepted": False, "reason": "forbidden"}, status_code=403)
 
+    received_ms = int(time.time() * 1000)
+
+    def refuse(reason: str, **extra):
+        ORDERS.labels(reason).inc()
+        return {"accepted": False, "reason": reason, **extra}
+
     lo, hi = price_band(reference_price(body.symbol))
     if not lo <= body.price < hi:
-        return {"accepted": False, "reason": "price_out_of_band", "lo": lo, "hi": hi}
+        return refuse("price_out_of_band", lo=lo, hi=hi)
 
     cooldown_key = f"rl:order:{x_client_ip}"
     if not r.set(cooldown_key, 1, nx=True, ex=COOLDOWN_SECS):
-        return {"accepted": False, "reason": "rate_limited", "retry_after": max(r.ttl(cooldown_key), 1)}
+        return refuse("rate_limited", retry_after=max(r.ttl(cooldown_key), 1))
     hour_key = f"rl:hour:{x_client_ip}"
     count = r.incr(hour_key)
     if count == 1:
         r.expire(hour_key, 3600)
     if count > HOURLY_LIMIT:
-        return {"accepted": False, "reason": "hourly_limit", "retry_after": max(r.ttl(hour_key), 1)}
+        return refuse("hourly_limit", retry_after=max(r.ttl(hour_key), 1))
+
+    visitor = visitor_of(x_visitor_id, x_client_ip)
+    unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, body.price)
+    if unaffordable:
+        return refuse(unaffordable)
 
     # shortcut: a Redis-only counter, so a Redis restart without a Kafka restart could reuse ids; both are wiped together on teardown
     order_id = ORDER_ID_BASE + r.incr("demo:order_id") % ORDER_ID_BLOCK
+    # every visitor order rests in the book until it fills (the form's order type is ignored), so the house can complete it
     req = SubmitOrder(
         api_key         = DEMO_API_KEY,
         symbol          = body.symbol,
         price           = body.price,
         quantity        = body.quantity,
         order_direction = SIDE_BUY if body.side == "buy" else SIDE_SELL,
-        order_type      = ORDER_TYPE_FAK if body.type == "fak" else ORDER_TYPE_GTC,
+        order_type      = ORDER_TYPE_GTC,
         client_order_id = order_id,
     )
 
     try:
+        started = time.perf_counter()
         ack = stub.submit_order(req, metadata=[("x-api-key", DEMO_API_KEY)], timeout=5)
-        return {"accepted": ack.accepted, "reason": ack.rejected_reason, "order_id": order_id}
+        SUBMIT_SECONDS.observe(time.perf_counter() - started)
     except grpc.RpcError as e:
         unavailable = e.code() == grpc.StatusCode.UNAVAILABLE
-        return {"accepted": False, "reason": "gateway_unavailable" if unavailable else e.details()}
+        return refuse("gateway_unavailable" if unavailable else e.details())
+
+    if not ack.accepted:
+        return refuse(ack.rejected_reason or "rejected")
+
+    ORDERS.labels("accepted").inc()
+    wallet.open_order(r, visitor, order_id, {
+        "symbol": body.symbol, "side": body.side, "qty": body.quantity, "price": body.price,
+        "sent_ms": received_ms, "received_ms": received_ms, "acked_ms": int(time.time() * 1000),
+    })
+    threading.Thread(
+        target=finish_order, args=(visitor, body.symbol, order_id, body.side, body.price, body.quantity), daemon=True
+    ).start()
+    return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False}
 
 
 _status_cache = (0.0, False)
@@ -204,7 +306,9 @@ def traders():
 
 
 @app.get("/account")
-def account():
+def account(x_visitor_id: str = Header(""), x_client_ip: str = Header("unknown")):
+    if VISITOR_ID.match(x_visitor_id):
+        return wallet.view(r, x_visitor_id)
     def num(key):
         return int(round(float(r.get(key) or 0)))
     return {
@@ -215,8 +319,20 @@ def account():
 
 
 @app.get("/order/{symbol}/{order_id}")
-def order_status(symbol: str, order_id: int):
+def order_status(symbol: str, order_id: int, x_visitor_id: str = Header("")):
     check_symbol(symbol)
+    mine = wallet.read_order(r, x_visitor_id, order_id) if VISITOR_ID.match(x_visitor_id) else None
+    if mine:
+        fills = mine["fills"]
+        return {
+            "known": True, "qty": mine["qty"], "price": mine["price"],
+            "filled": sum(f["qty"] for f in fills), "fills": fills,
+            "trace": {
+                "received_ms": mine.get("received_ms"), "acked_ms": mine.get("acked_ms"),
+                "first_fill_ms": min((f["ts_ms"] for f in fills if f.get("ts_ms")), default=None),
+                "settled_ms": mine.get("settled_ms"),
+            },
+        }
     meta  = r.hgetall(f"order_meta:{symbol}:{order_id}")
     fills = [
         {"price": t["price"], "qty": t["qty"], "ts_ms": t.get("ts_ms"),

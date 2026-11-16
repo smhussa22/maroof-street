@@ -54,7 +54,8 @@ INSERT INTO accounts (account_id, name) VALUES
     (5, 'demo'),
     (6, 'go-momentum'),
     (7, 'rust-mean-reversion'),
-    (8, 'java-twap')
+    (8, 'java-twap'),
+    (9, 'demo-liquidity')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO balances (account_id, cash) VALUES
@@ -65,7 +66,8 @@ INSERT INTO balances (account_id, cash) VALUES
     (5, 1000000),
     (6, 5000000),
     (7, 5000000),
-    (8, 10000000)
+    (8, 10000000),
+    (9, 1000000000)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO positions (account_id, symbol, quantity) VALUES
@@ -74,7 +76,8 @@ INSERT INTO positions (account_id, symbol, quantity) VALUES
     (5, 'AAPL',  500),   (5, 'TSLA',  500),   (5, 'NVDA',  500),   (5, 'MSFT',  500),   (5, 'GOOGL',  500),
     (6, 'AAPL',  5000),  (6, 'TSLA',  5000),  (6, 'NVDA',  5000),  (6, 'MSFT',  5000),  (6, 'GOOGL',  5000),
     (7, 'AAPL',  5000),  (7, 'TSLA',  5000),  (7, 'NVDA',  5000),  (7, 'MSFT',  5000),  (7, 'GOOGL',  5000),
-    (8, 'AAPL',  10000), (8, 'TSLA',  10000), (8, 'NVDA',  10000), (8, 'MSFT',  10000), (8, 'GOOGL',  10000)
+    (8, 'AAPL',  10000), (8, 'TSLA',  10000), (8, 'NVDA',  10000), (8, 'MSFT',  10000), (8, 'GOOGL',  10000),
+    (9, 'AAPL', 10000000), (9, 'TSLA', 10000000), (9, 'NVDA', 10000000), (9, 'MSFT', 10000000), (9, 'GOOGL', 10000000)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO api_keys (key_hash, account_id) VALUES
@@ -85,5 +88,10 @@ INSERT INTO api_keys (key_hash, account_id) VALUES
     (encode(sha256('demo-key-789'),     'hex'), 5),
     (encode(sha256('go-bot-key-333'),   'hex'), 6),
     (encode(sha256('rust-bot-key-444'), 'hex'), 7),
-    (encode(sha256('java-bot-key-555'), 'hex'), 8)
+    (encode(sha256('java-bot-key-555'), 'hex'), 8),
+    (encode(sha256('house-key-999'),    'hex'), 9)
 ON CONFLICT DO NOTHING;
+
+-- the shared account every visitor order goes through needs room for many visitors; each visitor's own wallet is kept separately
+UPDATE balances  SET cash     = GREATEST(cash, 1000000000) WHERE account_id = 5;
+UPDATE positions SET quantity = GREATEST(quantity, 10000000) WHERE account_id = 5;
