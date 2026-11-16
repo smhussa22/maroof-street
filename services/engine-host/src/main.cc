@@ -20,7 +20,7 @@ int main()
 
     // overridable for containers and Kubernetes; the default suits a local run
     const char* brokers_env = std::getenv("KAFKA_BROKERS");
-    const std::string brokers { (brokers_env && *brokers_env) ? brokers_env : brokers };
+    const std::string brokers { (brokers_env && *brokers_env) ? brokers_env : "localhost:9092" };
 
     KafkaPublisher<4096> publisher { std::string("events.") + symbol, brokers };
     KafkaListener listener { publisher, symbol };

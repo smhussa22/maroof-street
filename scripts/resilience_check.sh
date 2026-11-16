@@ -4,6 +4,9 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# 5432 sits inside a port range Windows sometimes reserves, so this check uses 15432
+export POSTGRES_PORT="${POSTGRES_PORT:-15432}"
+export DATABASE_URL="host=localhost port=$POSTGRES_PORT dbname=exchange user=exchange password=exchange"
 PYTHON=/mnt/c/Users/faraz/maroof-street/.venv/bin/python3
 PIDS=()
 ENGINE_PID=""
@@ -49,11 +52,11 @@ wait_for "the docker engine" docker info
 "${COMPOSE[@]}" up -d kafka redis postgres >/dev/null 2>&1
 wait_for kafka "${COMPOSE[@]}" exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
 wait_for redis nc -z localhost 6379
-wait_for postgres "$PYTHON" -c "import psycopg2; psycopg2.connect('host=localhost dbname=exchange user=exchange password=exchange').close()"
+wait_for postgres "$PYTHON" -c "import os, psycopg2; psycopg2.connect(os.environ['DATABASE_URL']).close()"
 
 "$PYTHON" - <<'PY'
-import psycopg2
-conn = psycopg2.connect("host=localhost dbname=exchange user=exchange password=exchange")
+import os, psycopg2
+conn = psycopg2.connect(os.environ["DATABASE_URL"])
 with conn, conn.cursor() as cur:
     cur.execute(open("services/ledger/schema.sql").read())
 PY
@@ -65,7 +68,8 @@ done
 start_engine
 nice -n 10 ./build/services/gateway/gateway > /dev/null 2>&1 &
 PIDS+=($!)
-EXCHANGE_SESSION=resilience PYTHONPATH=services/ledger nice -n 10 "$PYTHON" services/ledger/main.py > /tmp/resilience_ledger.log 2>&1 &
+# a fresh session per run: trades are keyed by (session, seq, symbol), so reusing one would skip every fill as a duplicate
+EXCHANGE_SESSION="resilience-$(date +%s)" PYTHONPATH=services/ledger nice -n 10 "$PYTHON" services/ledger/main.py > /tmp/resilience_ledger.log 2>&1 &
 PIDS+=($!)
 wait_for gateway nc -z localhost 50051
 

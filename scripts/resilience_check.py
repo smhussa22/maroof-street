@@ -98,6 +98,7 @@ def before():
     while not r.exists("balance:3:cash"):
         time.sleep(0.5)
     start = totals()
+    cash_before = {a: float(r.get(f"balance:{a}:cash") or 0) for a in (3, 4)}
     print("totals before trading:", start)
 
     # a run of crossing trades between two accounts, some filling at a better price than the limit
@@ -109,7 +110,13 @@ def before():
         place(BUYER_KEY, buy_id, SIDE_BUY, 153, 5, ORDER_TYPE_FAK)  # buys 3, the other 2 are cancelled
     after_run = settled_totals()
     print("totals after 40 trades and cancelled remainders:", after_run)
-    conserved = after_run == start
+    traded = len(fills)
+    moved = {a: float(r.get(f"balance:{a}:cash") or 0) - cash_before[a] for a in (3, 4)}
+    print(f"fills seen: {traded}; cash moved: market-maker {moved[3]:+.0f}, random-trader {moved[4]:+.0f}")
+    if moved[3] <= 0 or moved[4] >= 0:
+        traded = 0  # the seller should have gained cash and the buyer lost it
+    # an unchanged total proves nothing if nothing traded
+    conserved = after_run == start and traded >= 20
     print("CONSERVATION:", "PASS" if conserved else "FAIL")
 
     # leave one resting order on each side, far from the trading range, then remember them
@@ -136,6 +143,8 @@ def after():
     else:
         raise SystemExit("the restarted engine never answered")
 
+    cash_mm = float(r.get("balance:3:cash") or 0)
+
     # a buy that crosses the sell left resting before the crash, and a sell that crosses the resting buy
     buy_id, sell_id = ID_BASE + 7000, ID_BASE + 7001
     place(BUYER_KEY, buy_id, SIDE_BUY, 158, 5, ORDER_TYPE_FAK)
@@ -148,10 +157,12 @@ def after():
     print("RECOVERY:", "PASS" if recovered else "FAIL")
 
     final = settled_totals()
+    gained = float(r.get("balance:3:cash") or 0) - cash_mm
+    print(f"market-maker cash gained from the two post-crash fills: {gained:+.0f} (expected +1500)")
     print("totals after recovery:", final)
     conserved = final == state["totals"] or all(abs(final[k] - state["totals"][k]) < 1e-6 for k in final)
     print("CONSERVATION AFTER CRASH:", "PASS" if conserved else "FAIL")
-    return recovered and conserved
+    return recovered and conserved and gained >= 1500
 
 
 if __name__ == "__main__":

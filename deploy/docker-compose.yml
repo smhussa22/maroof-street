@@ -27,7 +27,9 @@ services:
       POSTGRES_PASSWORD: exchange
       POSTGRES_DB: exchange
     ports:
-      - "5432:5432"
+      # Windows can reserve 5432 for itself (see `netsh interface ipv4 show excludedportrange protocol=tcp`);
+      # set POSTGRES_PORT=15432 if Docker cannot publish it
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
