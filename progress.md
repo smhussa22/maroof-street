@@ -3,6 +3,10 @@
 ## Goals
 - public demo: a hosted page where anyone can submit a trade, see it accepted or rejected, and follow it through the system
   - [x] page built on the personal site: live order book and depth chart, trade feed with trader names, order entry, a live order journey, and a market-closed state
+  - [x] each visitor gets their own wallet (anonymous id in a cookie), and every demo order completes: a house account takes any unfilled remainder at the visitor's price
+  - [x] replay mode: when no exchange is running the page plays back a recorded session and matches visitor orders against it, clearly labelled
+  - [x] `scripts/record_session.py` records a live session for replay
+  - [ ] record a real session and commit it to the site (the site currently shows "market closed" until one exists)
   - [ ] always-on hosting so visitors can use it without me running it
 
 ## Stage 0: Prerequisites
@@ -59,22 +63,23 @@
 - [x] balances and positions seeded from Postgres into Redis at gateway startup
 - [x] client order ids must be below 1,000,000 (the engine's id-slot limit); the gateway rejects larger ones
 - [x] ledger gives back only what is still reserved on cancel, reject, partial fills and the unfilled remainder of FAK orders (unit-tested)
-- [ ] live check that money and shares are conserved across all accounts after a long run
+- [x] live check: money and shares conserved across all accounts after 40 trades with cancelled remainders (`scripts/resilience_check.sh`); a longer soak run is still open
 
 ## Stage 6: Kubernetes
 - [x] manifests: Deployments and Services for every component, namespace, ConfigMap, Secret template
 - [x] gRPC health checks as readiness and liveness probes (gateway, http gateway)
 - [x] one engine-host Deployment per symbol (SYMBOL env var), c6i node affinity
 - [x] load balancer annotations on the gateway and http gateway
-- [ ] Dockerfiles for the other services, and images built and pushed
+- [x] Dockerfiles for the engine host, services and bots, and a compose file that runs everything (`deploy/docker-compose.prod.yml`); written but not yet built or pushed
+- [ ] images built and pushed
 - [ ] Kafka via Strimzi, Redis and Postgres via Bitnami Helm charts
 - [ ] gateway HPA, EBS volumes, cluster autoscaler
 - [ ] actually deployed to a cluster
 
 ## Stage 7: Crash recovery
 - [x] engine-host replays `commands.<SYMBOL>` from offset 0 on startup to rebuild the book, without republishing events
-- [ ] kill-and-restart test: book identical before and after, trading resumes
-- [ ] ledger balances conserved across a crash and recovery
+- [x] kill-and-restart test: engine killed with SIGKILL, restarted, and orders that were resting before the crash still match (`scripts/resilience_check.sh`)
+- [x] ledger balances conserved across a crash and recovery (same script)
 
 ## Stage 8: Frontend and bots
 - [x] demo page on the personal site (not a separate React app): order book, depth chart, trade feed, order entry, order journey, trader cards
@@ -86,7 +91,7 @@
 ## Stage 9: Observability and benchmarks
 - [x] engine hot path: 99.9% of orders matched in under 1µs
 - [x] end-to-end order-to-fill latency (gateway → Kafka → engine → Kafka): p50 2.7 ms, p99 4.6 ms over 1,000 orders, one machine over loopback (`scripts/latency_bench.sh`)
-- [ ] Prometheus metrics — orders/sec, latency, Kafka consumer lag, rejects
-- [ ] Grafana dashboards
+- [x] Prometheus metrics from the HTTP gateway, ledger and market data: orders by outcome, order-ack latency, Kafka consumer lag, events handled (the C++ gateway and engine do not export metrics yet)
+- [x] Grafana dashboard provisioned (`deploy/monitoring`, `--profile monitoring`); written but not yet run against live traffic
 - [ ] throughput test through the whole system
 - [ ] architecture diagram and results table in README
