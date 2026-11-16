@@ -24,7 +24,7 @@ def frame(base: str) -> dict:
     return {
         "t": int(time.time() * 1000),
         "market": get(base, "market"),
-        "tape": get(base, "tape?limit=30"),
+        "tape": get(base, "tape?limit=100"),
         "traders": get(base, "traders"),
         "books": {s: get(base, f"book/{s}?levels=10") for s in SYMBOLS},
         "trades": {s: get(base, f"trades/{s}")[:10] for s in SYMBOLS},
