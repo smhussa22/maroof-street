@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,8 +22,6 @@ import (
 )
 
 const (
-	gatewayAddr = "localhost:50051"
-	redisAddr   = "localhost:6379"
 	apiKey      = "go-bot-key-333"
 	window      = 5
 	threshold   = 4 // out of window
@@ -31,6 +30,8 @@ const (
 )
 
 var (
+	gatewayAddr = envOr("GATEWAY_ADDR", "localhost:50051")
+	redisAddr   = envOr("REDIS_ADDR", "localhost:6379")
 	symbols   = []string{"AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"}
 	refPrices = map[string]int32{"AAPL": 150, "TSLA": 250, "NVDA": 400, "MSFT": 300, "GOOGL": 170}
 	idCounter atomic.Uint64
@@ -145,4 +146,12 @@ func main() {
 		go runSymbol(sym, stub, rdb, &wg)
 	}
 	wg.Wait()
+}
+
+// settings come from the environment (containers, Kubernetes); the defaults suit a local run
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
 }

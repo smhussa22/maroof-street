@@ -19,8 +19,10 @@ import java.util.concurrent.TimeUnit;
 public class TwapBot {
 
     private static final String API_KEY          = "java-bot-key-555";
-    private static final String GATEWAY_HOST     = "localhost";
-    private static final int    GATEWAY_PORT     = 50051;
+    // GATEWAY_ADDR (host:port) comes from the environment in containers and Kubernetes
+    private static final String GATEWAY_ADDR     = System.getenv().getOrDefault("GATEWAY_ADDR", "localhost:50051");
+    private static final String GATEWAY_HOST     = GATEWAY_ADDR.substring(0, GATEWAY_ADDR.lastIndexOf(':'));
+    private static final int    GATEWAY_PORT     = Integer.parseInt(GATEWAY_ADDR.substring(GATEWAY_ADDR.lastIndexOf(':') + 1));
 
     private static final String[] SYMBOLS        = {"AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"};
     private static final int[]    REF_PRICES     = { 150,    250,    400,    300,    170   };

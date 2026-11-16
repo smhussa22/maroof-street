@@ -15,8 +15,6 @@ use orders::{
     order_service_client::OrderServiceClient, OrderDirection, OrderType, SubmitOrder,
 };
 
-const GATEWAY:   &str = "http://localhost:50051";
-const REDIS_URL: &str = "redis://localhost:6379";
 const API_KEY:   &str = "rust-bot-key-444";
 const SYMBOLS:   &[&str] = &["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"];
 const WINDOW:    usize = 20;
@@ -32,12 +30,19 @@ fn next_id() -> u64 {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let channel = tonic::transport::Channel::from_static(GATEWAY)
+    // settings come from the environment (containers, Kubernetes); the defaults suit a local run
+    let gateway = format!(
+        "http://{}",
+        std::env::var("GATEWAY_ADDR").unwrap_or_else(|_| "localhost:50051".into())
+    );
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
+
+    let channel = tonic::transport::Channel::from_shared(gateway)?
         .connect()
         .await?;
     let mut client = OrderServiceClient::new(channel);
 
-    let redis = redis::Client::open(REDIS_URL)?;
+    let redis = redis::Client::open(redis_url)?;
     let mut con = redis.get_multiplexed_async_connection().await?;
 
     let mut windows: HashMap<&str, VecDeque<f64>> = SYMBOLS
