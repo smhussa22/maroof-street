@@ -1,0 +1,191 @@
+# The whole exchange on one machine, always on:  docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Kafka and Redis keep their data in volumes, so a restart keeps the book. Run `./scripts/market_close.py` first
+# for an orderly end of day. Optional extras: --profile monitoring (Prometheus + Grafana), --profile tunnel.
+#
+# Needs a .env next to this file (or exported):  EXCHANGE_PROXY_SECRET=<long random string>
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-python: &python
+  <<: *restart
+  environment: &python-env
+    KAFKA_BROKERS: kafka:9092
+    REDIS_URL: redis://redis:6379
+    DATABASE_URL: host=postgres dbname=exchange user=exchange password=exchange
+    GATEWAY_ADDR: gateway:50051
+    EXCHANGE_SESSION: live
+  depends_on: [kafka, redis, postgres]
+
+x-engine: &engine
+  <<: *restart
+  build: { context: .., dockerfile: deploy/docker/engine-host.Dockerfile }
+  image: maroof-street/engine-host
+  environment: &engine-env
+    KAFKA_BROKERS: kafka:9092
+  depends_on: [kafka]
+  mem_limit: 256m
+
+services:
+
+  kafka:
+    <<: *restart
+    image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    volumes: [kafka_data:/var/lib/kafka/data]
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      retries: 12
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    mem_limit: 128m
+
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: exchange
+      POSTGRES_PASSWORD: exchange
+      POSTGRES_DB: exchange
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../services/ledger/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    mem_limit: 256m
+
+  gateway:
+    <<: *restart
+    build: { context: .., dockerfile: services/gateway/Dockerfile }
+    image: maroof-street/gateway
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_HOST: redis
+      DATABASE_URL: host=postgres dbname=exchange user=exchange password=exchange
+    depends_on: [kafka, redis, postgres]
+    mem_limit: 256m
+
+  engine-aapl:  { <<: *engine, environment: { <<: *engine-env, SYMBOL: AAPL } }
+  engine-tsla:  { <<: *engine, environment: { <<: *engine-env, SYMBOL: TSLA } }
+  engine-nvda:  { <<: *engine, environment: { <<: *engine-env, SYMBOL: NVDA } }
+  engine-msft:  { <<: *engine, environment: { <<: *engine-env, SYMBOL: MSFT } }
+  engine-googl: { <<: *engine, environment: { <<: *engine-env, SYMBOL: GOOGL } }
+
+  ledger:
+    <<: *python
+    build: { context: .., dockerfile: deploy/docker/python.Dockerfile, args: { ENTRY: "python services/ledger/main.py" } }
+    image: maroof-street/ledger
+    mem_limit: 192m
+
+  market-data:
+    <<: *python
+    build: { context: .., dockerfile: deploy/docker/python.Dockerfile, args: { ENTRY: "python services/market-data/main.py" } }
+    image: maroof-street/market-data
+    mem_limit: 192m
+
+  gateway-http:
+    <<: *python
+    build:
+      context: ..
+      dockerfile: deploy/docker/python.Dockerfile
+      args: { ENTRY: "uvicorn main:app --app-dir services/gateway-http --host 0.0.0.0 --port 8080" }
+    image: maroof-street/gateway-http
+    environment:
+      <<: *python-env
+      DEMO_API_KEY: demo-key-789
+      PROXY_SECRET: ${EXCHANGE_PROXY_SECRET:?set EXCHANGE_PROXY_SECRET}
+    ports: ["8080:8080"]
+    mem_limit: 192m
+
+  market-maker:
+    <<: *python
+    build: { context: .., dockerfile: deploy/docker/python.Dockerfile, args: { ENTRY: "python services/bots/market_maker.py" } }
+    image: maroof-street/market-maker
+    mem_limit: 96m
+
+  random-trader:
+    <<: *python
+    build: { context: .., dockerfile: deploy/docker/python.Dockerfile, args: { ENTRY: "python services/bots/random_trader.py" } }
+    image: maroof-street/random-trader
+    mem_limit: 96m
+
+  go-bot:
+    <<: *restart
+    build: { context: .., dockerfile: deploy/docker/bot-go.Dockerfile }
+    image: maroof-street/go-bot
+    environment: { GATEWAY_ADDR: "gateway:50051", REDIS_ADDR: "redis:6379" }
+    depends_on: [gateway, redis]
+    mem_limit: 64m
+
+  rust-bot:
+    <<: *restart
+    build: { context: .., dockerfile: deploy/docker/bot-rust.Dockerfile }
+    image: maroof-street/rust-bot
+    environment: { GATEWAY_ADDR: "gateway:50051", REDIS_URL: "redis://redis:6379" }
+    depends_on: [gateway, redis]
+    mem_limit: 64m
+
+  java-bot:
+    <<: *restart
+    build: { context: .., dockerfile: deploy/docker/bot-java.Dockerfile }
+    image: maroof-street/java-bot
+    environment: { GATEWAY_ADDR: "gateway:50051" }
+    depends_on: [gateway]
+    mem_limit: 192m
+
+  # --- optional ---
+
+  tunnel:
+    profiles: [tunnel]
+    <<: *restart
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [gateway-http]
+
+  prometheus:
+    profiles: [monitoring]
+    <<: *restart
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["9090:9090"]
+    mem_limit: 256m
+
+  grafana:
+    profiles: [monitoring]
+    <<: *restart
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+    mem_limit: 192m
+
+volumes:
+  kafka_data:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:

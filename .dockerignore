@@ -1,0 +1,15 @@
+build/
+build-asan/
+.venv/
+.venv-win/
+.git/
+graphify-out/
+docs/
+ui/
+web/
+__pycache__/
+*.pyc
+services/bots/rust/target/
+services/bots/java/build/
+services/bots/java/.gradle/
+services/bots/go/go-bot
