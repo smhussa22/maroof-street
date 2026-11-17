@@ -52,6 +52,7 @@ A mini stock exchange for AAPL, TSLA, NVDA, MSFT and GOOGL, built around my [C++
 ### The public demo
 
 - Each website visitor gets an anonymous wallet ($100,000 to start) kept apart from every other visitor's.
+- **Market** orders buy or sell right away at the best price in the book. **Limit** orders use the visitor's price: at or better than the market they trade now, otherwise they rest in the book (highlighted as theirs) and, if the market has not reached them after 12 seconds, are moved to the nearest price that trades.
 - Demo orders always complete: whatever the real book cannot fill, a house account takes at the visitor's price, so every visitor sees a full trip through the exchange.
 - The website always has a market to show. When the real exchange is switched off, the page runs a simulated market around the clock: prices, book depth and bot trades are generated from the clock, and visitor orders are matched in the simulation. It is labelled "Simulated market", and the fills are marked simulated. When the real exchange is up, the page shows it instead.
 - After an order is placed, the page shows the steps it went through with real timestamps and highlights the order in the book and the live activity feed.
