@@ -12,6 +12,11 @@ declare -A COLOR=(
 
 PIDS=()
 
+# Windows can reserve 5432 for itself on some boots (netsh interface ipv4 show excludedportrange protocol=tcp);
+# run with POSTGRES_PORT=15432 ./start dev in that case
+export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+export DATABASE_URL="${DATABASE_URL:-host=localhost port=$POSTGRES_PORT dbname=exchange user=exchange password=exchange}"
+
 cleanup() {
     echo -e "\nshutting down..."
     for pid in "${PIDS[@]}"; do
@@ -43,7 +48,6 @@ start() {
             ;;
         ledger)
             run ledger env \
-                DATABASE_URL="host=localhost dbname=exchange user=exchange password=exchange" \
                 KAFKA_BROKERS="localhost:9092" \
                 REDIS_URL="redis://localhost:6379" \
                 PYTHONPATH="services/ledger" \
@@ -183,7 +187,7 @@ if [ "$1" = "infra-up" ]; then
     docker-compose -f deploy/docker-compose.yml up -d
     wait_for_kafka
     wait_for_port localhost 6379 "redis"
-    wait_for_port localhost 5432 "postgres"
+    wait_for_port localhost "$POSTGRES_PORT" "postgres"
     echo "infra ready"
     exit 0
 fi
@@ -212,7 +216,7 @@ if [ "$1" = "all" ] || [ "$1" = "dev" ]; then
     start infra
     wait_for_kafka
     wait_for_port localhost 6379 "redis"
-    wait_for_port localhost 5432 "postgres"
+    wait_for_port localhost "$POSTGRES_PORT" "postgres"
 
     for sym in AAPL TSLA NVDA MSFT GOOGL; do
         SYMBOL="$sym" start engine-host
