@@ -53,7 +53,7 @@ A mini stock exchange for AAPL, TSLA, NVDA, MSFT and GOOGL, built around my [C++
 
 - Each website visitor gets an anonymous wallet ($100,000 to start) kept apart from every other visitor's.
 - Demo orders always complete: whatever the real book cannot fill, a house account takes at the visitor's price, so every visitor sees a full trip through the exchange.
-- When no exchange is running, the page replays a session recorded from the real system and matches visitor orders against the recorded book. It is labelled as a replay and the fills as simulated.
+- The website always has a market to show. When the real exchange is switched off, the page runs a simulated market around the clock: prices, book depth and bot trades are generated from the clock, and visitor orders are matched in the simulation. It is labelled "Simulated market", and the fills are marked simulated. When the real exchange is up, the page shows it instead.
 - After an order is placed, the page shows the steps it went through with real timestamps and highlights the order in the book and the live activity feed.
 
 ## Benchmarks
@@ -106,9 +106,13 @@ The HTTP gateway, ledger and market-data service export Prometheus metrics. A Gr
 | `exchange_house_orders_total` | Orders the house account placed to complete visitor orders |
 
 ```bash
-EXCHANGE_PROXY_SECRET=change-me docker compose -f deploy/docker-compose.prod.yml --profile monitoring up -d
-# Grafana:    http://localhost:3000   (dashboard "Maroof Street")
+# next to a running ./start dev:
+docker-compose -f deploy/docker-compose.yml --profile monitoring up -d prometheus grafana
+# Grafana:    http://localhost:3000   (dashboard "Maroof Street", editable)
 # Prometheus: http://localhost:9090
+
+# or with the containerised stack:
+EXCHANGE_PROXY_SECRET=change-me docker compose -f deploy/docker-compose.prod.yml --profile monitoring up -d
 ```
 
 The dashboard has six panels: orders per second by outcome, order acknowledgement latency (p50 and p99), consumer lag, events handled per second, rejected orders by reason, and house orders per minute. The C++ gateway and engine do not export metrics yet.
@@ -134,7 +138,7 @@ Run everything in containers on one machine (Kafka and Redis keep their data in 
 EXCHANGE_PROXY_SECRET=<long random string> docker compose -f deploy/docker-compose.prod.yml up -d --build
 ```
 
-To let the website talk to it, expose the HTTP gateway (port 8080) through a Cloudflare Tunnel (`./start tunnel`) and set `EXCHANGE_URL` and `EXCHANGE_PROXY_SECRET` on the website. To fill the replay with real data, run `scripts/record_session.py` while the exchange is trading.
+To let the website talk to it, expose the HTTP gateway (port 8080) through a Cloudflare Tunnel (`./start tunnel`) and set `EXCHANGE_URL` and `EXCHANGE_PROXY_SECRET` on the website.
 
 If Docker cannot publish Postgres on 5432 on Windows (the port can fall inside a range Windows reserves), set `POSTGRES_PORT` to something else, for example `15432`.
 

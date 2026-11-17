@@ -4,9 +4,8 @@
 - public demo: a hosted page where anyone can submit a trade, see it accepted or rejected, and follow it through the system
   - [x] page built on the personal site: live order book and depth chart, trade feed with trader names, order entry, a live order journey, and a market-closed state
   - [x] each visitor gets their own wallet (anonymous id in a cookie), and every demo order completes: a house account takes any unfilled remainder at the visitor's price
-  - [x] replay mode: when no exchange is running the page plays back a recorded session and matches visitor orders against it, clearly labelled
-  - [x] `scripts/record_session.py` records a live session for replay
-  - [ ] record a real session and commit it to the site (the site currently shows "market closed" until one exists)
+  - [x] simulated market: when no exchange is running, the page runs a market generated from the clock (random weeks of prices, book depth and bot trades) and matches visitor orders in it, labelled "Simulated market"
+  - [x] `scripts/record_session.py` records a live session (not used by the site)
   - [ ] always-on hosting so visitors can use it without me running it
 
 ## Stage 0: Prerequisites

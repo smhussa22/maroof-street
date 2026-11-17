@@ -33,5 +33,27 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # `docker-compose --profile monitoring up -d prometheus grafana` while ./start dev is running;
+  # Prometheus reads the services running on this machine, Grafana is at http://localhost:3000
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v2.53.0
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./monitoring/prometheus.local.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
 volumes:
   postgres_data:
