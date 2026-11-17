@@ -218,6 +218,14 @@ if [ "$1" = "all" ] || [ "$1" = "dev" ]; then
     wait_for_port localhost 6379 "redis"
     wait_for_port localhost "$POSTGRES_PORT" "postgres"
 
+    # the gateway loads accounts, keys and balances from Postgres when it starts, so the schema must be there first
+    /mnt/c/Users/faraz/maroof-street/.venv/bin/python3 - <<'PY'
+import os, psycopg2
+conn = psycopg2.connect(os.environ["DATABASE_URL"])
+with conn, conn.cursor() as cur:
+    cur.execute(open("services/ledger/schema.sql").read())
+PY
+
     for sym in AAPL TSLA NVDA MSFT GOOGL; do
         SYMBOL="$sym" start engine-host
     done
