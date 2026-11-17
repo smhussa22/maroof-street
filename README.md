@@ -117,6 +117,17 @@ EXCHANGE_PROXY_SECRET=change-me docker compose -f deploy/docker-compose.prod.yml
 
 ![Grafana dashboard](docs/images/grafana.png)
 
+Prometheus scrapes three targets every 5 seconds: the HTTP gateway (`/metrics/`), the ledger (port 9101) and market data (port 9102). Queries behind the main panels:
+
+| Panel | Query |
+|---|---|
+| Orders per second | `sum by (result) (rate(exchange_orders_total[1m]))` |
+| Acknowledgement latency p99 | `histogram_quantile(0.99, sum by (le) (rate(exchange_submit_seconds_bucket[1m])))` |
+| Consumer lag | `exchange_consumer_lag` |
+| Events handled per second | `sum by (kind) (rate(ledger_events_total[1m]))` |
+
+The screenshot above was taken during a 200 second burst of mixed traffic against the running stack. The "Rejected orders" panel still shows the `Deadline Exceeded` errors from before the gateway hang was fixed.
+
 The dashboard has six panels: orders per second by outcome, order acknowledgement latency (p50 and p99), consumer lag, events handled per second, rejected orders by reason, and house orders per minute. It is provisioned from `deploy/monitoring` and can be edited in the Grafana UI. The C++ gateway and engine do not export metrics yet.
 
 ## Build & Run
