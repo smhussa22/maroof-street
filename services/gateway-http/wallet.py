@@ -49,6 +49,13 @@ def open_order(r, visitor: str, order_id: int, order: dict) -> None:
         r.expire(wallet, TTL_SECS)
 
 
+def annotate(r, visitor: str, order_id: int, **fields) -> None:
+    """Adds facts about what happened to an order (for example that it was moved to a price that trades)."""
+    order = read_order(r, visitor, order_id)
+    if order is not None:
+        r.set(_order_key(visitor, order_id), json.dumps({**order, **fields}), ex=TTL_SECS)
+
+
 def read_order(r, visitor: str, order_id: int) -> dict | None:
     raw = r.get(_order_key(visitor, order_id))
     return json.loads(raw) if raw else None

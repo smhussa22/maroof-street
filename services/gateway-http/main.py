@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ledger'))
 
-from orders_pb2 import SubmitOrder, ORDER_TYPE_GTC, ORDER_TYPE_FAK, SIDE_BUY, SIDE_SELL
+from orders_pb2 import SubmitOrder, CancelOrder, ORDER_TYPE_GTC, ORDER_TYPE_FAK, SIDE_BUY, SIDE_SELL
 import orders_pb2_grpc
 import wallet
 from market import REF_PRICES, price_band, summarize
@@ -36,6 +36,7 @@ COOLDOWN_SECS = 3
 HOURLY_LIMIT  = 30
 HOUSE_API_KEY = os.getenv("HOUSE_API_KEY", "house-key-999")
 HOUSE_ID_BASE = 800_000  # market-data's ID_RANGES maps this block to "Demo Liquidity"
+REST_SECS = 12           # how long a limit order away from the market rests in the book before the exchange moves it
 HOUSE_WAIT_SECS = 0.4    # how long a visitor order gets to fill against the real book before the house steps in
 SETTLE_TRIES = 24
 # visitor orders on one stock go through one at a time: the engine matches best price first, so a second visitor's order
@@ -75,7 +76,7 @@ class OrderRequest(BaseModel):
     side:     Literal["buy", "sell"]
     price:    int = Field(gt=0, lt=1_000_000)
     quantity: int = Field(ge=1, le=100)
-    type:     Literal["gtc", "fak"] = "gtc"
+    type:     Literal["market", "limit", "gtc", "fak"] = "limit"  # gtc and fak are the old names for limit
 
 
 def check_symbol(symbol: str) -> None:
@@ -165,17 +166,62 @@ def house_order(symbol: str, side: str, price: int, qty: int) -> None:
     HOUSE_FILLS.inc()
 
 
-def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int, qty: int) -> None:
+def touch(symbol: str) -> tuple[int, int]:
+    """Best bid and best ask (0 when that side of the book is empty)."""
+    top = r.hgetall(f"md:{symbol}:top")
+    return int(float(top.get(b"best_bid") or 0)), int(float(top.get(b"best_ask") or 0))
+
+
+def all_fills(symbol: str, ids: list[int]) -> list[dict]:
+    out = [f for i in ids for f in fills_for(symbol, i)]
+    return sorted(out, key=lambda f: f.get("ts_ms") or 0)
+
+
+def sweep(visitor: str, symbol: str, order_id: int, side: str, price: int, remaining: int) -> list[int]:
+    """A limit order that never reached the market: cancel it and place the rest at the nearest price that trades."""
+    stub.cancel_order(CancelOrder(api_key=DEMO_API_KEY, symbol=symbol, order_id=order_id),
+                      metadata=[("x-api-key", DEMO_API_KEY)], timeout=5)
+    time.sleep(0.3)
+    left = remaining - sum(f["qty"] for f in fills_for(symbol, order_id))
+    if left <= 0:
+        return [order_id]
+    moved = marketable_price(symbol, side, price)
+    new_id = ORDER_ID_BASE + r.incr("demo:order_id") % ORDER_ID_BLOCK
+    ack = stub.submit_order(SubmitOrder(
+        api_key=DEMO_API_KEY, symbol=symbol, price=moved, quantity=left,
+        order_direction=SIDE_BUY if side == "buy" else SIDE_SELL,
+        order_type=ORDER_TYPE_GTC, client_order_id=new_id,
+    ), metadata=[("x-api-key", DEMO_API_KEY)], timeout=5)
+    if not ack.accepted:
+        raise RuntimeError(f"sweep order refused: {ack.rejected_reason}")
+    wallet.annotate(r, visitor, order_id, swept_ms=int(time.time() * 1000), moved_to=moved)
+    time.sleep(HOUSE_WAIT_SECS)
+    return [order_id, new_id]
+
+
+def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int, qty: int, resting: bool = False) -> None:
     """Background: let the real book fill the order, cover whatever is left with the house, then settle the wallet.
-    The caller took the symbol's lock; it is released here when the order is done."""
+    An order at the front of the book holds the symbol's lock until it is done. A resting limit order does not hold
+    it while it waits; if it is still unfilled after REST_SECS it takes the lock, is moved to a price that trades,
+    and the house completes it."""
+    ids = [order_id]
+    locked = not resting
     try:
-        time.sleep(HOUSE_WAIT_SECS)
-        if sum(f["qty"] for f in fills_for(symbol, order_id)) < qty:
-            remaining = qty - sum(f["qty"] for f in fills_for(symbol, order_id))
-            if remaining > 0:
-                house_order(symbol, side, price, remaining)
+        if resting:
+            deadline = time.time() + REST_SECS
+            while time.time() < deadline and sum(f["qty"] for f in all_fills(symbol, ids)) < qty:
+                time.sleep(0.5)
+            if sum(f["qty"] for f in all_fills(symbol, ids)) < qty:
+                SYMBOL_LOCKS[symbol].acquire()
+                locked = True
+                ids = sweep(visitor, symbol, order_id, side, price, qty)
+        else:
+            time.sleep(HOUSE_WAIT_SECS)
+        remaining = qty - sum(f["qty"] for f in all_fills(symbol, ids))
+        if remaining > 0:
+            house_order(symbol, side, wallet_price(visitor, order_id, price), remaining)
         for _ in range(SETTLE_TRIES):
-            fills = fills_for(symbol, order_id)
+            fills = all_fills(symbol, ids)
             wallet.settle(r, visitor, order_id, fills, now_ms=int(time.time() * 1000))
             if sum(f["qty"] for f in fills) >= qty:
                 return
@@ -183,7 +229,14 @@ def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int
     except Exception as e:  # a failed background step must never take the service down
         print(f"finish_order {symbol} {order_id} failed: {e}", flush=True)
     finally:
-        SYMBOL_LOCKS[symbol].release()
+        if locked:
+            SYMBOL_LOCKS[symbol].release()
+
+
+def wallet_price(visitor: str, order_id: int, price: int) -> int:
+    """The price the order currently sits at: the moved price after a sweep, otherwise the one it was placed at."""
+    o = wallet.read_order(r, visitor, order_id) or {}
+    return o.get("moved_to") or price
 
 
 @app.post("/order")
@@ -203,10 +256,6 @@ def submit_order(
         ORDERS.labels(reason).inc()
         return {"accepted": False, "reason": reason, **extra}
 
-    lo, hi = price_band(reference_price(body.symbol))
-    if not lo <= body.price < hi:
-        return refuse("price_out_of_band", lo=lo, hi=hi)
-
     cooldown_key = f"rl:order:{x_client_ip}"
     if not r.set(cooldown_key, 1, nx=True, ex=COOLDOWN_SECS):
         return refuse("rate_limited", retry_after=max(r.ttl(cooldown_key), 1))
@@ -223,7 +272,23 @@ def submit_order(
     handed_off = False
     try:
         asked_price = body.price
-        price = marketable_price(body.symbol, body.side, body.price)
+        bid, ask = touch(body.symbol)
+        if body.type == "market":
+            # a market order is priced by the exchange: the best price on the other side of the book
+            price = (ask if body.side == "buy" else bid) or marketable_price(body.symbol, body.side, body.price)
+            asked_price = price
+        else:
+            price = body.price
+        lo, hi = price_band(reference_price(body.symbol))
+        if not lo <= price < hi:
+            return refuse("price_out_of_band", lo=lo, hi=hi)
+        if body.side == "buy":
+            reaches = bool(ask) and price >= ask
+        else:
+            reaches = bool(bid) and price <= bid
+        resting = body.type != "market" and not reaches and bool(bid and ask)
+        if not resting:
+            price = marketable_price(body.symbol, body.side, price)
         visitor = visitor_of(x_visitor_id, x_client_ip)
         unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, price)
         if unaffordable:
@@ -259,11 +324,12 @@ def submit_order(
             "sent_ms": received_ms, "received_ms": received_ms, "acked_ms": int(time.time() * 1000),
         })
         threading.Thread(
-            target=finish_order, args=(visitor, body.symbol, order_id, body.side, price, body.quantity), daemon=True
+            target=finish_order, args=(visitor, body.symbol, order_id, body.side, price, body.quantity, resting), daemon=True
         ).start()
-        handed_off = True
+        # a resting order does not hold the symbol while it waits, so other visitors are not blocked for REST_SECS
+        handed_off = not resting
         return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False, "price": price,
-                "repriced_from": asked_price if price != asked_price else None}
+                "resting": resting, "repriced_from": asked_price if price != asked_price and body.type != "market" else None}
     finally:
         # finish_order releases the lock once the order is done; any earlier exit releases it here
         if not handed_off:
@@ -373,6 +439,7 @@ def order_status(symbol: str, order_id: int, x_visitor_id: str = Header("")):
                 "received_ms": mine.get("received_ms"), "acked_ms": mine.get("acked_ms"),
                 "first_fill_ms": min((f["ts_ms"] for f in fills if f.get("ts_ms")), default=None),
                 "settled_ms": mine.get("settled_ms"),
+                "swept_ms": mine.get("swept_ms"), "moved_to": mine.get("moved_to"),
             },
         }
     meta  = r.hgetall(f"order_meta:{symbol}:{order_id}")
