@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 #include "SpscQueue.hh"
@@ -101,6 +102,11 @@ template <size_t N>
 inline void KafkaPublisher<N>::drain_()
 {
 
+    // spin briefly after a message so a burst is sent with minimal delay, then sleep between checks so an idle
+    // publisher does not hold a whole CPU core (there is one per symbol in the gateway and one in each engine)
+    constexpr int SPIN_BEFORE_SLEEP { 5000 };
+    int idle { 0 };
+
     while (m_running || !m_queue.is_empty())
     {
 
@@ -109,10 +115,26 @@ inline void KafkaPublisher<N>::drain_()
         if (!cmd.has_value())
         {
 
-            std::this_thread::yield();
+            if (++idle < SPIN_BEFORE_SLEEP)
+            {
+
+                std::this_thread::yield();
+
+            }
+            else
+            {
+
+                // keep serving rdkafka's delivery callbacks while idle
+                m_producer->poll(0);
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+            }
+
             continue;
 
         }
+
+        idle = 0;
 
         RdKafka::ErrorCode err { m_producer->produce(m_topic, RdKafka::Topic::PARTITION_UA, RdKafka::Producer::RK_MSG_COPY, const_cast<char*>(cmd->data()), cmd->size(), nullptr, 0, 0, nullptr) };
 

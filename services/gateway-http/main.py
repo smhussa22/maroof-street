@@ -123,6 +123,26 @@ def fills_for(symbol: str, order_id: int) -> list[dict]:
     return out
 
 
+def marketable_price(symbol: str, side: str, price: int) -> int:
+    """
+    The engine matches best price first, so the house can only complete a visitor order that sits at the front of the
+    book. A price away from the market is moved to the nearest price that trades: inside the spread (where it becomes
+    the best bid or offer) or, when there is no room inside the spread, across it.
+    """
+    top = r.hgetall(f"md:{symbol}:top")
+    bid = int(float(top.get(b"best_bid") or 0))
+    ask = int(float(top.get(b"best_ask") or 0))
+    if side == "buy" and bid and not (ask and price >= ask):
+        price = max(price, bid + 1)
+        if ask and price >= ask:
+            price = ask
+    elif side == "sell" and ask and not (bid and price <= bid):
+        price = min(price, ask - 1)
+        if bid and price <= bid:
+            price = bid
+    return price
+
+
 def house_order(symbol: str, side: str, price: int, qty: int) -> None:
     """Takes the other side of a visitor order at the visitor's price, so every demo order completes the full path."""
     house_id = HOUSE_ID_BASE + r.incr("demo:house_id") % ORDER_ID_BLOCK
@@ -135,7 +155,9 @@ def house_order(symbol: str, side: str, price: int, qty: int) -> None:
         order_type      = ORDER_TYPE_GTC,
         client_order_id = house_id,
     )
-    stub.submit_order(req, metadata=[("x-api-key", HOUSE_API_KEY)], timeout=5)
+    ack = stub.submit_order(req, metadata=[("x-api-key", HOUSE_API_KEY)], timeout=5)
+    if not ack.accepted:
+        raise RuntimeError(f"house order refused: {ack.rejected_reason}")
     HOUSE_FILLS.inc()
 
 
@@ -188,8 +210,10 @@ def submit_order(
     if count > HOURLY_LIMIT:
         return refuse("hourly_limit", retry_after=max(r.ttl(hour_key), 1))
 
+    asked_price = body.price
+    price = marketable_price(body.symbol, body.side, body.price)
     visitor = visitor_of(x_visitor_id, x_client_ip)
-    unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, body.price)
+    unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, price)
     if unaffordable:
         return refuse(unaffordable)
 
@@ -199,7 +223,7 @@ def submit_order(
     req = SubmitOrder(
         api_key         = DEMO_API_KEY,
         symbol          = body.symbol,
-        price           = body.price,
+        price           = price,
         quantity        = body.quantity,
         order_direction = SIDE_BUY if body.side == "buy" else SIDE_SELL,
         order_type      = ORDER_TYPE_GTC,
@@ -219,13 +243,14 @@ def submit_order(
 
     ORDERS.labels("accepted").inc()
     wallet.open_order(r, visitor, order_id, {
-        "symbol": body.symbol, "side": body.side, "qty": body.quantity, "price": body.price,
+        "symbol": body.symbol, "side": body.side, "qty": body.quantity, "price": price,
         "sent_ms": received_ms, "received_ms": received_ms, "acked_ms": int(time.time() * 1000),
     })
     threading.Thread(
-        target=finish_order, args=(visitor, body.symbol, order_id, body.side, body.price, body.quantity), daemon=True
+        target=finish_order, args=(visitor, body.symbol, order_id, body.side, price, body.quantity), daemon=True
     ).start()
-    return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False}
+    return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False, "price": price,
+            "repriced_from": asked_price if price != asked_price else None}
 
 
 _status_cache = (0.0, False)

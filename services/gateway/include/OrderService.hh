@@ -17,6 +17,8 @@
 
 #include "KafkaPublisher.hh"
 #include "Redis.hh"
+#include <mutex>
+
 #include "Crypto.hh"
 
 class GatewayOrderService : public maroof_street::orders::OrderService::Service
@@ -44,6 +46,10 @@ private:
     // symbol e.g. "AAPL" -> Kafka producer for the AAPL matching engine
     std::unordered_map<std::string, std::unique_ptr<KafkaPublisher<4096>>> m_publishers {};
     redisContext* m_redis { nullptr };
+
+    // gRPC calls this service from many threads, but one hiredis connection and each publisher's single-producer queue
+    // are not safe to share, so each request holds this for its Redis calls and its publish
+    std::mutex m_mutex {};
     std::string m_rate_limit_script {};
     std::string m_reserve_cash_script {};
     std::string m_reserve_shares_script {};
@@ -163,6 +169,8 @@ inline GatewayOrderService::GatewayOrderService(const std::vector<std::string>& 
 
 inline grpc::Status GatewayOrderService::submit_order(grpc::ServerContext* grpc_ctx, const maroof_street::orders::SubmitOrder* request, maroof_street::orders::OrderAck* response)
 {
+    const std::lock_guard<std::mutex> lock { m_mutex };
+
     const auto account_id = lookup_account(m_redis, grpc_ctx);
     if (!account_id)
         return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "invalid or missing api key");
@@ -216,6 +224,8 @@ inline grpc::Status GatewayOrderService::submit_order(grpc::ServerContext* grpc_
 
 inline grpc::Status GatewayOrderService::cancel_order(grpc::ServerContext* grpc_ctx, const maroof_street::orders::CancelOrder* request, maroof_street::orders::OrderAck* response)
 {
+    const std::lock_guard<std::mutex> lock { m_mutex };
+
     const auto account_id = lookup_account(m_redis, grpc_ctx);
     if (!account_id)
         return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "invalid or missing api key");
