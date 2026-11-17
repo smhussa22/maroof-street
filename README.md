@@ -1,5 +1,9 @@
 # Maroof Street: A Distributed Stock Exchange
 
+[Check out a live demo](https://youtu.be/fZIoyYbrzmA)
+
+[Try it out yourself](https://syedmaroofhussain.com/maroof-street)
+
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![Kafka](https://img.shields.io/badge/Apache-Kafka-black)
 ![order to fill p50](https://img.shields.io/badge/order%20to%20fill%20p50-2.9%20ms-brightgreen)
