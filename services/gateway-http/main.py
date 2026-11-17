@@ -38,6 +38,10 @@ HOUSE_API_KEY = os.getenv("HOUSE_API_KEY", "house-key-999")
 HOUSE_ID_BASE = 800_000  # market-data's ID_RANGES maps this block to "Demo Liquidity"
 HOUSE_WAIT_SECS = 0.4    # how long a visitor order gets to fill against the real book before the house steps in
 SETTLE_TRIES = 24
+# visitor orders on one stock go through one at a time: the engine matches best price first, so a second visitor's order
+# resting nearby would be hit by the house order that completes the first
+SYMBOL_LOCKS = {sym: threading.Lock() for sym in REF_PRICES}
+LOCK_WAIT_SECS = 8
 VISITOR_ID = re.compile(r"^[0-9a-f-]{36}$")
 
 ORDERS = Counter("exchange_orders_total", "Visitor orders by outcome", ["result"])
@@ -162,7 +166,8 @@ def house_order(symbol: str, side: str, price: int, qty: int) -> None:
 
 
 def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int, qty: int) -> None:
-    """Background: let the real book fill the order, cover whatever is left with the house, then settle the wallet."""
+    """Background: let the real book fill the order, cover whatever is left with the house, then settle the wallet.
+    The caller took the symbol's lock; it is released here when the order is done."""
     try:
         time.sleep(HOUSE_WAIT_SECS)
         if sum(f["qty"] for f in fills_for(symbol, order_id)) < qty:
@@ -177,6 +182,8 @@ def finish_order(visitor: str, symbol: str, order_id: int, side: str, price: int
             time.sleep(0.25)
     except Exception as e:  # a failed background step must never take the service down
         print(f"finish_order {symbol} {order_id} failed: {e}", flush=True)
+    finally:
+        SYMBOL_LOCKS[symbol].release()
 
 
 @app.post("/order")
@@ -210,47 +217,57 @@ def submit_order(
     if count > HOURLY_LIMIT:
         return refuse("hourly_limit", retry_after=max(r.ttl(hour_key), 1))
 
-    asked_price = body.price
-    price = marketable_price(body.symbol, body.side, body.price)
-    visitor = visitor_of(x_visitor_id, x_client_ip)
-    unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, price)
-    if unaffordable:
-        return refuse(unaffordable)
-
-    # shortcut: a Redis-only counter, so a Redis restart without a Kafka restart could reuse ids; both are wiped together on teardown
-    order_id = ORDER_ID_BASE + r.incr("demo:order_id") % ORDER_ID_BLOCK
-    # every visitor order rests in the book until it fills (the form's order type is ignored), so the house can complete it
-    req = SubmitOrder(
-        api_key         = DEMO_API_KEY,
-        symbol          = body.symbol,
-        price           = price,
-        quantity        = body.quantity,
-        order_direction = SIDE_BUY if body.side == "buy" else SIDE_SELL,
-        order_type      = ORDER_TYPE_GTC,
-        client_order_id = order_id,
-    )
-
+    lock = SYMBOL_LOCKS[body.symbol]
+    if not lock.acquire(timeout=LOCK_WAIT_SECS):
+        return refuse("busy", retry_after=2)
+    handed_off = False
     try:
-        started = time.perf_counter()
-        ack = stub.submit_order(req, metadata=[("x-api-key", DEMO_API_KEY)], timeout=5)
-        SUBMIT_SECONDS.observe(time.perf_counter() - started)
-    except grpc.RpcError as e:
-        unavailable = e.code() == grpc.StatusCode.UNAVAILABLE
-        return refuse("gateway_unavailable" if unavailable else e.details())
+        asked_price = body.price
+        price = marketable_price(body.symbol, body.side, body.price)
+        visitor = visitor_of(x_visitor_id, x_client_ip)
+        unaffordable = wallet.check_funds(r, visitor, body.side, body.symbol, body.quantity, price)
+        if unaffordable:
+            return refuse(unaffordable)
 
-    if not ack.accepted:
-        return refuse(ack.rejected_reason or "rejected")
+        # shortcut: a Redis-only counter, so a Redis restart without a Kafka restart could reuse ids; both are wiped together on teardown
+        order_id = ORDER_ID_BASE + r.incr("demo:order_id") % ORDER_ID_BLOCK
+        # every visitor order rests in the book until it fills (the form's order type is ignored), so the house can complete it
+        req = SubmitOrder(
+            api_key         = DEMO_API_KEY,
+            symbol          = body.symbol,
+            price           = price,
+            quantity        = body.quantity,
+            order_direction = SIDE_BUY if body.side == "buy" else SIDE_SELL,
+            order_type      = ORDER_TYPE_GTC,
+            client_order_id = order_id,
+        )
 
-    ORDERS.labels("accepted").inc()
-    wallet.open_order(r, visitor, order_id, {
-        "symbol": body.symbol, "side": body.side, "qty": body.quantity, "price": price,
-        "sent_ms": received_ms, "received_ms": received_ms, "acked_ms": int(time.time() * 1000),
-    })
-    threading.Thread(
-        target=finish_order, args=(visitor, body.symbol, order_id, body.side, price, body.quantity), daemon=True
-    ).start()
-    return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False, "price": price,
-            "repriced_from": asked_price if price != asked_price else None}
+        try:
+            started = time.perf_counter()
+            ack = stub.submit_order(req, metadata=[("x-api-key", DEMO_API_KEY)], timeout=5)
+            SUBMIT_SECONDS.observe(time.perf_counter() - started)
+        except grpc.RpcError as e:
+            unavailable = e.code() == grpc.StatusCode.UNAVAILABLE
+            return refuse("gateway_unavailable" if unavailable else e.details())
+
+        if not ack.accepted:
+            return refuse(ack.rejected_reason or "rejected")
+
+        ORDERS.labels("accepted").inc()
+        wallet.open_order(r, visitor, order_id, {
+            "symbol": body.symbol, "side": body.side, "qty": body.quantity, "price": price,
+            "sent_ms": received_ms, "received_ms": received_ms, "acked_ms": int(time.time() * 1000),
+        })
+        threading.Thread(
+            target=finish_order, args=(visitor, body.symbol, order_id, body.side, price, body.quantity), daemon=True
+        ).start()
+        handed_off = True
+        return {"accepted": True, "reason": "", "order_id": order_id, "simulated": False, "price": price,
+                "repriced_from": asked_price if price != asked_price else None}
+    finally:
+        # finish_order releases the lock once the order is done; any earlier exit releases it here
+        if not handed_off:
+            lock.release()
 
 
 _status_cache = (0.0, False)

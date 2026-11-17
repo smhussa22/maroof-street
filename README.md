@@ -2,8 +2,8 @@
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![Kafka](https://img.shields.io/badge/Apache-Kafka-black)
-![order to fill p50](https://img.shields.io/badge/order%20to%20fill%20p50-2.7%20ms-brightgreen)
-![order to fill p99](https://img.shields.io/badge/order%20to%20fill%20p99-4.6%20ms-brightgreen)
+![order to fill p50](https://img.shields.io/badge/order%20to%20fill%20p50-2.9%20ms-brightgreen)
+![order to fill p99](https://img.shields.io/badge/order%20to%20fill%20p99-4.7%20ms-brightgreen)
 ![engine p99.9](https://img.shields.io/badge/engine%20p99.9-%3C%201%20%C2%B5s-brightgreen)
 
 A mini stock exchange for AAPL, TSLA, NVDA, MSFT and GOOGL, built around my [C++ matching engine](https://github.com/smhussa22/matching-engine). Orders come in over gRPC, pass pre-trade risk checks, are written to a Kafka log, matched by one engine per stock, and settled by a ledger. Five bots written in four languages trade against each other, and a public demo lets anyone place an order and watch it travel through the system.
@@ -77,10 +77,10 @@ From the moment a `SubmitOrder` call leaves the client to the moment the matchin
 
 | Metric | Result |
 |---|---|
-| p50 | 2.7 ms |
-| p99 | 4.6 ms |
+| p50 | 2.9 ms |
+| p99 | 4.7 ms |
 
-Setting the Kafka producer's `linger.ms` from its 5 ms default to 0 took p99 from 13.4 ms to 4.6 ms; batching had been most of the latency.
+Setting the Kafka producer's `linger.ms` from its 5 ms default to 0 took p99 from 13.4 ms to about 4.7 ms; batching had been most of the latency.
 
 ### Correctness and recovery
 
@@ -115,7 +115,9 @@ docker-compose -f deploy/docker-compose.yml --profile monitoring up -d prometheu
 EXCHANGE_PROXY_SECRET=change-me docker compose -f deploy/docker-compose.prod.yml --profile monitoring up -d
 ```
 
-The dashboard has six panels: orders per second by outcome, order acknowledgement latency (p50 and p99), consumer lag, events handled per second, rejected orders by reason, and house orders per minute. The C++ gateway and engine do not export metrics yet.
+![Grafana dashboard](docs/images/grafana.png)
+
+The dashboard has six panels: orders per second by outcome, order acknowledgement latency (p50 and p99), consumer lag, events handled per second, rejected orders by reason, and house orders per minute. It is provisioned from `deploy/monitoring` and can be edited in the Grafana UI. The C++ gateway and engine do not export metrics yet.
 
 ## Build & Run
 

@@ -89,7 +89,7 @@
 
 ## Stage 9: Observability and benchmarks
 - [x] engine hot path: 99.9% of orders matched in under 1µs
-- [x] end-to-end order-to-fill latency (gateway → Kafka → engine → Kafka): p50 2.7 ms, p99 4.6 ms over 1,000 orders, one machine over loopback (`scripts/latency_bench.sh`)
+- [x] end-to-end order-to-fill latency (gateway → Kafka → engine → Kafka): p50 2.9 ms, p99 4.7 ms over 1,000 orders (re-measured after the gateway concurrency fixes), one machine over loopback (`scripts/latency_bench.sh`)
 - [x] Prometheus metrics from the HTTP gateway, ledger and market data: orders by outcome, order-ack latency, Kafka consumer lag, events handled (the C++ gateway and engine do not export metrics yet)
 - [x] Grafana dashboard provisioned (`deploy/monitoring`, `--profile monitoring`); written but not yet run against live traffic
 - [ ] throughput test through the whole system

@@ -5,6 +5,9 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# 5432 sits inside a port range Windows sometimes reserves, so this check uses 15432
+export POSTGRES_PORT="${POSTGRES_PORT:-15432}"
+export DATABASE_URL="host=localhost port=$POSTGRES_PORT dbname=exchange user=exchange password=exchange"
 PYTHON=/mnt/c/Users/faraz/maroof-street/.venv/bin/python3
 PIDS=()
 OVERRIDE="$(mktemp)"
@@ -50,12 +53,12 @@ wait_for "the docker engine" docker info
 
 wait_for kafka "${COMPOSE[@]}" exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
 wait_for redis nc -z localhost 6379
-wait_for postgres "$PYTHON" -c "import psycopg2; psycopg2.connect('host=localhost dbname=exchange user=exchange password=exchange').close()"
+wait_for postgres "$PYTHON" -c "import os, psycopg2; psycopg2.connect(os.environ['DATABASE_URL']).close()"
 
 # make sure the accounts, keys and balances the gateway seeds from exist, then create the two topics up front
 "$PYTHON" - <<'EOF'
-import psycopg2
-conn = psycopg2.connect("host=localhost dbname=exchange user=exchange password=exchange")
+import os, psycopg2
+conn = psycopg2.connect(os.environ["DATABASE_URL"])
 with conn, conn.cursor() as cur:
     cur.execute(open("services/ledger/schema.sql").read())
 EOF

@@ -108,7 +108,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Trades settled per second",
+      "title": "Events handled per second",
       "description": "Events handled by the ledger and market data.",
       "datasource": {
         "type": "prometheus",
